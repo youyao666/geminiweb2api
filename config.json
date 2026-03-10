@@ -1,12 +1,13 @@
 {
-  "api_key": "",
+  "api_key": "meml",
   "token": "",
+  "cookies": "",
   "proxy": "",
-  "port": 8080,
-  "log_level": "info",
+  "gemini_url": "",
+  "gemini_home_url": "",
+  "port": 18060,
+  "log_level": "debug",
   "log_file": "",
   "note": [
-    ""
   ]
 }
-

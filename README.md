@@ -16,7 +16,10 @@
 {
   "api_key": "<your-secret-key>",
   "token": "<gemini-token>",
+  "cookies": "",
   "proxy": "",
+  "gemini_url": "",
+  "gemini_home_url": "",
   "port": 8080,
   "log_level": "debug",
   "log_file": "",
@@ -28,7 +31,10 @@
 
 - `api_key`：客户端调用时需携带的 Bearer 令牌。
 - `token`：从已登录的 Gemini 网页提取的 session token。
-- `proxy`：可选的出口代理地址。
+- `cookies`：可选，Gemini 网页 Cookie（用于自动抓取/刷新 token）。
+- `proxy`：可选的出口代理地址；为空时会自动读取环境变量 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`。
+- `gemini_url`：可选，覆盖 StreamGenerate 的请求地址（用于反代/自建入口）。
+- `gemini_home_url`：可选，覆盖 Gemini 首页地址（用于抓取匿名 token 或从 Cookie 抓 token）。
 - `port`：HTTP 服务端口，默认 `8080`。
 - `log_level`：控制日志输出粒度。
 - `log_file`：为空时输出到控制台，否则写入文件。

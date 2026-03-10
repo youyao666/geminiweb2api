@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	rand2 "math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -53,15 +54,17 @@ var modelIDMap = map[string]string{
 }
 
 type Config struct {
-	APIKey   string   `json:"api_key"`
-	Token    string   `json:"token"`
-	Cookies  string   `json:"cookies"`
-	Tokens   []string `json:"tokens"`
-	Proxy    string   `json:"proxy"`
-	Port     int      `json:"port"`
-	LogFile  string   `json:"log_file"`
-	LogLevel string   `json:"log_level"`
-	Note     []string `json:"note"`
+	APIKey        string   `json:"api_key"`
+	Token         string   `json:"token"`
+	Cookies       string   `json:"cookies"`
+	Tokens        []string `json:"tokens"`
+	Proxy         string   `json:"proxy"`
+	GeminiURL     string   `json:"gemini_url"`
+	GeminiHomeURL string   `json:"gemini_home_url"`
+	Port          int      `json:"port"`
+	LogFile       string   `json:"log_file"`
+	LogLevel      string   `json:"log_level"`
+	Note          []string `json:"note"`
 }
 
 type TokenInfo struct {
@@ -92,7 +95,8 @@ func (tm *TokenManager) Init() {
 }
 
 func (tm *TokenManager) FetchAnonymousToken() (string, error) {
-	req, err := http.NewRequest("GET", GeminiHomeURL, nil)
+	endpoints := currentGeminiEndpoints()
+	req, err := http.NewRequest("GET", endpoints.home, nil)
 	if err != nil {
 		return "", fmt.Errorf("create request failed: %v", err)
 	}
@@ -185,6 +189,12 @@ var configMutex sync.RWMutex
 var httpClient *http.Client
 var requestID uint64
 
+func getConfigSnapshot() Config {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return config
+}
+
 type GeminiSession struct {
 	ConversationID string // c_xxx
 	ResponseID     string // r_xxx
@@ -253,16 +263,47 @@ type Logger struct {
 
 var logger *Logger
 
-func newLogger(level string, file *os.File) *Logger {
+func newLogger(level string, w io.Writer) *Logger {
 	flags := log.Ldate | log.Ltime | log.Lmicroseconds
 	l := &Logger{
-		infoLog:  log.New(file, "[INFO]  ", flags),
-		warnLog:  log.New(file, "[WARN]  ", flags),
-		errorLog: log.New(file, "[ERROR] ", flags),
-		debugLog: log.New(file, "[DEBUG] ", flags),
+		infoLog:  log.New(w, "[INFO]  ", flags),
+		warnLog:  log.New(w, "[WARN]  ", flags),
+		errorLog: log.New(w, "[ERROR] ", flags),
+		debugLog: log.New(w, "[DEBUG] ", flags),
 		level:    level,
 	}
 	return l
+}
+
+type geminiEndpoints struct {
+	url     string
+	home    string
+	origin  string
+	referer string
+}
+
+func currentGeminiEndpoints() geminiEndpoints {
+	cfg := getConfigSnapshot()
+	postURL := strings.TrimSpace(cfg.GeminiURL)
+	if postURL == "" {
+		postURL = GeminiURL
+	}
+	homeURL := strings.TrimSpace(cfg.GeminiHomeURL)
+	if homeURL == "" {
+		homeURL = GeminiHomeURL
+	}
+
+	origin := "https://gemini.google.com"
+	referer := "https://gemini.google.com/"
+	if u, err := url.Parse(homeURL); err == nil && u.Scheme != "" && u.Host != "" {
+		origin = u.Scheme + "://" + u.Host
+		referer = origin + "/"
+	} else if u, err := url.Parse(postURL); err == nil && u.Scheme != "" && u.Host != "" {
+		origin = u.Scheme + "://" + u.Host
+		referer = origin + "/"
+	}
+
+	return geminiEndpoints{url: postURL, home: homeURL, origin: origin, referer: referer}
 }
 
 func (l *Logger) Debug(format string, v ...interface{}) {
@@ -451,11 +492,10 @@ func reloadConfig() error {
 	if err := loadConfig(); err != nil {
 		return err
 	}
-	configMutex.RLock()
-	defer configMutex.RUnlock()
-	if config.Proxy != "" {
-		initHTTPClient()
+	if err := initLogger(); err != nil {
+		return err
 	}
+	initHTTPClient()
 	logger.Info("Config reloaded successfully")
 	return nil
 }
@@ -481,31 +521,42 @@ func startConfigWatcher() {
 }
 
 func initLogger() error {
+	cfg := getConfigSnapshot()
 	var output *os.File
 	var err error
 
-	if config.LogFile != "" {
-		output, err = os.OpenFile(config.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if cfg.LogFile != "" {
+		output, err = os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 		if err != nil {
 			return err
 		}
-		logger = newLogger(config.LogLevel, io.MultiWriter(os.Stdout, output).(*os.File))
+		logger = newLogger(cfg.LogLevel, io.MultiWriter(os.Stdout, output))
 	} else {
-		logger = newLogger(config.LogLevel, os.Stdout)
+		logger = newLogger(cfg.LogLevel, os.Stdout)
 	}
 	return nil
 }
 
 func initHTTPClient() {
-	transport := &http.Transport{}
+	cfg := getConfigSnapshot()
+	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 
-	if config.Proxy != "" {
-		proxyURL, err := url.Parse(config.Proxy)
+	if strings.TrimSpace(cfg.Proxy) != "" {
+		proxyURL, err := url.Parse(strings.TrimSpace(cfg.Proxy))
 		if err == nil {
 			transport.Proxy = http.ProxyURL(proxyURL)
-			logger.Info("Using proxy: %s", config.Proxy)
+			logger.Info("Using proxy: %s", cfg.Proxy)
 		} else {
-			logger.Warn("Invalid proxy URL: %s, error: %v", config.Proxy, err)
+			logger.Warn("Invalid proxy URL: %s, falling back to env proxy, error: %v", cfg.Proxy, err)
 		}
 	}
 
@@ -516,16 +567,18 @@ func initHTTPClient() {
 	logger.Info("HTTP client initialized")
 }
 func fetchToken() error {
-	if config.Cookies == "" {
+	cfg := getConfigSnapshot()
+	if cfg.Cookies == "" {
 		return nil
 	}
 
-	req, err := http.NewRequest("GET", GeminiHomeURL, nil)
+	endpoints := currentGeminiEndpoints()
+	req, err := http.NewRequest("GET", endpoints.home, nil)
 	if err != nil {
 		return fmt.Errorf("create request failed: %v", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
-	req.Header.Set("Cookie", config.Cookies)
+	req.Header.Set("Cookie", cfg.Cookies)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	randomIP := generateRandomIP()
@@ -594,9 +647,9 @@ func fetchToken() error {
 		return nil
 	}
 
-	if config.Token != "" {
+	if cfg.Token != "" {
 		tokenInfo.mutex.Lock()
-		tokenInfo.SNlM0e = config.Token
+		tokenInfo.SNlM0e = cfg.Token
 		tokenInfo.FetchedAt = time.Now()
 		tokenInfo.mutex.Unlock()
 		logger.Info("Using configured token")
@@ -611,14 +664,16 @@ func getToken() string {
 	if tokenInfo.SNlM0e != "" {
 		return tokenInfo.SNlM0e
 	}
-	return config.Token
+	cfg := getConfigSnapshot()
+	return cfg.Token
 }
 func refreshTokenIfNeeded() {
 	tokenInfo.mutex.RLock()
 	needRefresh := tokenInfo.SNlM0e == "" || time.Since(tokenInfo.FetchedAt) > 30*time.Minute
 	tokenInfo.mutex.RUnlock()
 
-	if needRefresh && config.Cookies != "" {
+	cfg := getConfigSnapshot()
+	if needRefresh && cfg.Cookies != "" {
 		if err := fetchToken(); err != nil {
 			logger.Warn("Failed to refresh token: %v", err)
 		}
@@ -626,7 +681,8 @@ func refreshTokenIfNeeded() {
 }
 
 func startTokenRefresher() {
-	if config.Cookies != "" {
+	cfg := getConfigSnapshot()
+	if cfg.Cookies != "" {
 		if err := fetchToken(); err != nil {
 			logger.Warn("Initial token fetch failed: %v", err)
 		}
@@ -658,9 +714,7 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	configMutex.RLock()
-	note := config.Note
-	configMutex.RUnlock()
+	note := getConfigSnapshot().Note
 
 	uptime := time.Since(metrics.StartTime).Seconds()
 	response := map[string]interface{}{
@@ -685,7 +739,9 @@ func main() {
 	if err := loadConfig(); err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	logger = newLogger(config.LogLevel, os.Stdout)
+	if err := initLogger(); err != nil {
+		log.Fatalf("Failed to init logger: %v", err)
+	}
 
 	initHTTPClient()
 	tokenManager.Init()
@@ -719,7 +775,8 @@ func main() {
 	}))
 	mux.HandleFunc("/v1/chat/completions", loggingMiddleware(handleChatCompletions))
 
-	addr := fmt.Sprintf(":%d", config.Port)
+	cfg := getConfigSnapshot()
+	addr := fmt.Sprintf(":%d", cfg.Port)
 	logger.Info("Server listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
@@ -737,8 +794,9 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "missing authorization header")
 		return
 	}
+	cfg := getConfigSnapshot()
 	auth = strings.TrimPrefix(auth, "Bearer ")
-	if auth != config.APIKey {
+	if auth != cfg.APIKey {
 		logger.Warn("Invalid API key attempt from %s", r.RemoteAddr)
 		writeError(w, http.StatusUnauthorized, "invalid api key")
 		return
@@ -1017,21 +1075,23 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	freqData := fmt.Sprintf(`[null,%q]`, string(innerJSON))
 	data := url.Values{}
 	data.Set("f.req", freqData)
-	req, err := http.NewRequest("POST", GeminiURL, strings.NewReader(data.Encode()))
+	cfg := getConfigSnapshot()
+	endpoints := currentGeminiEndpoints()
+	req, err := http.NewRequest("POST", endpoints.url, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 	req.Header.Set("accept-language", "zh-CN")
-	if config.Cookies != "" {
-		req.Header.Set("Cookie", config.Cookies)
+	if cfg.Cookies != "" {
+		req.Header.Set("Cookie", cfg.Cookies)
 	}
 	req.Header.Set("cache-control", "no-cache")
-	req.Header.Set("origin", "https://gemini.google.com")
+	req.Header.Set("origin", endpoints.origin)
 	req.Header.Set("pragma", "no-cache")
 	req.Header.Set("priority", "u=1, i")
-	req.Header.Set("referer", "https://gemini.google.com/")
+	req.Header.Set("referer", endpoints.referer)
 	req.Header.Set("sec-ch-ua", `"Not;A=Brand";v="24", "Chromium";v="128"`)
 	req.Header.Set("sec-ch-ua-arch", `"x86"`)
 	req.Header.Set("sec-ch-ua-bitness", `"64"`)
