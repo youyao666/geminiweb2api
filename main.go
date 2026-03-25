@@ -136,7 +136,7 @@ func (tm *TokenManager) FetchAnonymousToken() (string, error) {
 		if len(matches) > 1 {
 			snlm0e := string(matches[1])
 			if len(snlm0e) > 10 {
-				logger.Debug("Fetched anonymous SNlM0e (length=%d)", len(snlm0e))
+				logger.Debug("成功获取匿名 SNlM0e 令牌 (长度=%d)", len(snlm0e))
 				return snlm0e, nil
 			}
 		}
@@ -166,7 +166,7 @@ func (tm *TokenManager) GetTokenForSession(sessionKey string, isNewSession bool)
 		FetchedAt: time.Now(),
 		IsBad:     false,
 	}
-	logger.Debug("Assigned new anonymous token to session %s", sessionKey)
+	logger.Debug("已为会话 %s 分配新的匿名令牌", sessionKey)
 	return snlm0e, 0
 }
 
@@ -180,7 +180,7 @@ func (tm *TokenManager) MarkSessionTokenBad(sessionKey string) {
 
 	if token, exists := tm.sessionTokens[sessionKey]; exists {
 		token.IsBad = true
-		logger.Warn("Session %s token marked as bad", sessionKey)
+		logger.Warn("会话 %s 的令牌已被标记为失效", sessionKey)
 	}
 }
 
@@ -362,12 +362,12 @@ func loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		lrw := &loggingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
-		logger.Info("[#%d] --> %s %s %s", reqID, r.Method, r.URL.Path, r.RemoteAddr)
+		logger.Info("[#%d] 收到请求 --> %s %s %s", reqID, r.Method, r.URL.Path, r.RemoteAddr)
 
 		next(lrw, r)
 
 		duration := time.Since(start)
-		logger.Info("[#%d] <-- %d %s %d bytes %.3fms",
+		logger.Info("[#%d] 请求完成 <-- %d %s %d 字节 %.3fms",
 			reqID, lrw.statusCode, http.StatusText(lrw.statusCode), lrw.size, float64(duration.Microseconds())/1000)
 	}
 }
@@ -516,7 +516,7 @@ func reloadConfig() error {
 		return err
 	}
 	initHTTPClient()
-	logger.Info("Config reloaded successfully")
+	logger.Info("配置文件已成功重载")
 	return nil
 }
 
@@ -532,7 +532,7 @@ func startConfigWatcher() {
 			modTime := info.ModTime()
 			if !lastModTime.IsZero() && modTime.After(lastModTime) {
 				if err := reloadConfig(); err != nil {
-					logger.Error("Failed to reload config: %v", err)
+					logger.Error("重载配置文件失败: %v", err)
 				}
 			}
 			lastModTime = modTime
@@ -585,7 +585,7 @@ func initHTTPClient() {
 			transport.Proxy = http.ProxyURL(proxyURL)
 			proxyConfigured = true
 		} else {
-			logger.Warn("Invalid proxy URL: %s, falling back to env proxy, error: %v", cfg.Proxy, err)
+			logger.Warn("无效的代理 URL: %s，将回退到系统环境变量代理，错误: %v", cfg.Proxy, err)
 		}
 	}
 
@@ -597,13 +597,13 @@ func initHTTPClient() {
 	if proxyConfigured {
 		go testProxyConnectivity(cfg.Proxy)
 	} else {
-		logger.Info("HTTP client initialized without explicit proxy")
+		logger.Info("HTTP 客户端已初始化 (未配置显式代理)")
 	}
 }
 
 // testProxyConnectivity 在后台测试代理连接性，并打印详细日志
 func testProxyConnectivity(proxyStr string) {
-	logger.Info("Testing proxy connectivity: %s", proxyStr)
+	logger.Info("正在测试代理连通性: %s", proxyStr)
 
 	// 尝试通过代理访问 Google 首页进行快速连接测试
 	testURL := "https://www.google.com"
@@ -613,15 +613,15 @@ func testProxyConnectivity(proxyStr string) {
 	// 使用当前配置的 httpClient
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		logger.Warn("Proxy check failed (this might be temporary): %v. Requests will still be attempted with retries.", err)
+		logger.Warn("代理检测失败 (可能是暂时的): %v。请求仍将尝试进行重试。", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-		logger.Info("Proxy connectivity verified successfully via %s", proxyStr)
+		logger.Info("代理连通性验证成功: %s", proxyStr)
 	} else {
-		logger.Warn("Proxy check returned unexpected status: %d. Please check your proxy settings.", resp.StatusCode)
+		logger.Warn("代理检测返回异常状态码: %d。请检查您的代理设置。", resp.StatusCode)
 	}
 }
 
@@ -714,16 +714,16 @@ func fetchToken() error {
 		}
 		tokenInfo.FetchedAt = time.Now()
 		tokenInfo.mutex.Unlock()
-		logger.Info("Token fetched: SNlM0e(len=%d), BL=%s", len(snlm0e), blToken)
+		logger.Info("令牌获取成功: SNlM0e (长度=%d), BL=%s", len(snlm0e), blToken)
 		return nil
 	}
 
-	if cfg.Token != "" {
+	if config.Token != "" {
 		tokenInfo.mutex.Lock()
-		tokenInfo.SNlM0e = cfg.Token
+		tokenInfo.SNlM0e = config.Token
 		tokenInfo.FetchedAt = time.Now()
 		tokenInfo.mutex.Unlock()
-		logger.Info("Using configured token")
+		logger.Info("正在使用配置文件中的令牌")
 		return nil
 	}
 
@@ -746,7 +746,7 @@ func refreshTokenIfNeeded() {
 	cfg := getConfigSnapshot()
 	if needRefresh && cfg.Cookies != "" {
 		if err := fetchToken(); err != nil {
-			logger.Warn("Failed to refresh token: %v", err)
+			logger.Warn("自动刷新令牌失败: %v", err)
 		}
 	}
 }
@@ -755,7 +755,7 @@ func startTokenRefresher() {
 	cfg := getConfigSnapshot()
 	if cfg.Cookies != "" {
 		if err := fetchToken(); err != nil {
-			logger.Warn("Initial token fetch failed: %v", err)
+			logger.Warn("初始令牌获取失败: %v", err)
 		}
 	}
 	go func() {
@@ -807,14 +807,30 @@ func init() {
 }
 
 func main() {
-	println("=============== Gemini Web 2 API =====================")
-	println("作者: MapleLeaf QQ交流群号: 1081291958")
-	println("======================================================")
 	if err := loadConfig(); err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		log.Fatalf("加载配置失败: %v", err)
 	}
+	println("======================================================")
+	println("           Gemini Web 2 API 启动成功")
+	println("======================================================")
+	println("作者: MapleLeaf")
+	println("交流群: 1081291958")
+	println("------------------------------------------------------")
+	println("功能特性:")
+	println("1. 兼容 OpenAI Chat API 格式")
+	println("2. 支持 SOCKS5/HTTP 代理配置")
+	println("3. 自动管理与刷新 Google Gemini 会话 Token")
+	println("4. 启动时自动检测代理连通性")
+	println("5. 配置文件 (config.json) 自动生成与热加载")
+	println("------------------------------------------------------")
+	println("使用说明:")
+	println("- API端口: " + fmt.Sprintf("%d", getConfigSnapshot().Port))
+	println("- 核心接口: /v1/chat/completions")
+	println("- 监控接口: / (查看运行状态与 Token 消耗)")
+	println("======================================================")
+
 	if err := initLogger(); err != nil {
-		log.Fatalf("Failed to init logger: %v", err)
+		log.Fatalf("初始化日志系统失败: %v", err)
 	}
 
 	initHTTPClient()
@@ -826,8 +842,8 @@ func main() {
 	mux.HandleFunc("/", handleTelemetry)
 	mux.HandleFunc("/v1/models", loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			logger.Warn("Invalid method %s for /v1/models", r.Method)
-			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			logger.Warn("接口 /v1/models 收到无效的请求方法: %s", r.Method)
+			writeError(w, http.StatusMethodNotAllowed, "请求方法不允许")
 			return
 		}
 		now := time.Now().Unix()
@@ -851,40 +867,40 @@ func main() {
 
 	cfg := getConfigSnapshot()
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	logger.Info("Server listening on %s", addr)
+	logger.Info("服务器已启动，正在监听 %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
 func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		logger.Warn("Invalid method %s for /v1/chat/completions", r.Method)
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		logger.Warn("接口 /v1/chat/completions 收到无效的请求方法: %s", r.Method)
+		writeError(w, http.StatusMethodNotAllowed, "请求方法不允许")
 		return
 	}
 
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
-		logger.Warn("Missing authorization header from %s", r.RemoteAddr)
-		writeError(w, http.StatusUnauthorized, "missing authorization header")
+		logger.Warn("来自 %s 的请求缺失 Authorization 请求头", r.RemoteAddr)
+		writeError(w, http.StatusUnauthorized, "缺失 authorization 请求头")
 		return
 	}
 	cfg := getConfigSnapshot()
 	auth = strings.TrimPrefix(auth, "Bearer ")
 	if auth != cfg.APIKey {
-		logger.Warn("Invalid API key attempt from %s", r.RemoteAddr)
-		writeError(w, http.StatusUnauthorized, "invalid api key")
+		logger.Warn("来自 %s 的请求使用了无效的 API Key", r.RemoteAddr)
+		writeError(w, http.StatusUnauthorized, "无效的 api key")
 		return
 	}
 
 	var req ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		logger.Error("Failed to decode request body: %v", err)
+		logger.Error("解析请求体失败: %v", err)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	logger.Info("Chat request: model=%s, messages=%d, stream=%v", req.Model, len(req.Messages), req.Stream)
-	logger.Debug("Request messages: %+v", req.Messages)
+	logger.Info("对话请求: 模型=%s, 消息数=%d, 流式=%v", req.Model, len(req.Messages), req.Stream)
+	logger.Debug("请求消息内容: %+v", req.Messages)
 
 	sessionKey := r.Header.Get("X-Session-ID")
 	if sessionKey == "" {
@@ -899,28 +915,28 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	isNewSession := !exists
 
 	if req.ConversationID != "" && exists {
-		logger.Debug("Resuming conversation: %s", req.ConversationID)
+		logger.Debug("正在恢复对话: %s", req.ConversationID)
 	} else if req.ConversationID != "" && !exists {
 		session = &GeminiSession{ConversationID: req.ConversationID}
 		sessions[sessionKey] = session
-		logger.Debug("Created session from conversation_id: %s", req.ConversationID)
+		logger.Debug("根据 conversation_id 创建了新会话: %s", req.ConversationID)
 		isNewSession = false
 	} else if !exists {
 		session = &GeminiSession{}
 		sessions[sessionKey] = session
-		logger.Debug("Created new session: %s", sessionKey)
+		logger.Debug("创建了新会话: %s", sessionKey)
 	} else {
-		logger.Debug("Using existing session: %s (c=%s)", sessionKey, session.ConversationID)
+		logger.Debug("正在使用现有会话: %s (c=%s)", sessionKey, session.ConversationID)
 	}
 	snlm0eToken, _ := tokenManager.GetTokenForSession(sessionKey, isNewSession)
 
 	prompt := buildPrompt(req)
 
 	if req.Stream {
-		logger.Debug("Starting stream response")
+		logger.Debug("开始流式响应")
 		handleStreamResponse(w, prompt, req.Model, session, req.Tools, sessionKey, snlm0eToken)
 	} else {
-		logger.Debug("Starting non-stream response")
+		logger.Debug("开始非流式响应")
 		handleNonStreamResponse(w, prompt, req.Model, session, req.Tools, sessionKey, snlm0eToken)
 	}
 }
@@ -1073,7 +1089,7 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 
 		jsonStr := match[1]
 		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
-			logger.Debug("Failed to parse tool call: %v", err)
+			logger.Debug("解析工具调用失败: %v", err)
 			continue
 		}
 		toolExists := false
@@ -1107,16 +1123,16 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	modelID := modelIDMap["gemini-3-flash"]
 	if id, ok := modelIDMap[modelName]; ok {
 		modelID = id
-		logger.Debug("Using model: %s -> %s", modelName, modelID)
+		logger.Debug("正在使用模型: %s -> %s", modelName, modelID)
 	}
 
 	var contextArray []interface{}
 	if session != nil && session.ConversationID != "" {
 		contextArray = []interface{}{session.ConversationID, session.ResponseID, session.ChoiceID, nil, nil, nil, nil, nil, nil, ""}
-		logger.Debug("Using existing session: c=%s, r=%s, rc=%s", session.ConversationID, session.ResponseID, session.ChoiceID)
+		logger.Debug("正在使用现有会话: c=%s, r=%s, rc=%s", session.ConversationID, session.ResponseID, session.ChoiceID)
 	} else {
 		contextArray = []interface{}{nil, nil, nil, nil, nil, nil, nil, nil, nil, ""}
-		logger.Debug("Starting new conversation")
+		logger.Debug("正在开始新对话")
 	}
 	currentToken := snlm0eToken
 	if currentToken == "" {
@@ -1183,7 +1199,7 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	randomIP := generateRandomIP()
 	req.Header.Set("X-Forwarded-For", randomIP)
 	req.Header.Set("X-Real-IP", randomIP)
-	logger.Debug("Using random XFF IP: %s", randomIP)
+	logger.Debug("正在使用随机 XFF IP: %s", randomIP)
 	return req, nil
 }
 
@@ -1206,38 +1222,38 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			logger.Info("Retry attempt %d/%d for stream request", attempt, maxRetries)
+			logger.Info("流式请求正在进行第 %d/%d 次重试", attempt, maxRetries)
 			snlm0eToken, _ = tokenManager.GetTokenForSession(sessionKey, true)
 			time.Sleep(time.Duration(attempt*500) * time.Millisecond)
 		}
 
 		req, err := buildGeminiRequest(prompt, session, model, snlm0eToken)
 		if err != nil {
-			logger.Error("Failed to build Gemini request: %v", err)
+			logger.Error("构建 Gemini 请求失败: %v", err)
 			lastErr = err.Error()
 			continue
 		}
 
-		logger.Debug("Sending request to Gemini API...")
+		logger.Debug("正在发送请求到 Gemini API...")
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			if isConnectionError(err) {
-				logger.Warn("Connection error through proxy (attempt %d/%d): %v", attempt, maxRetries, err)
+				logger.Warn("通过代理连接出错 (尝试 %d/%d): %v", attempt, maxRetries, err)
 			} else {
-				logger.Error("Gemini API request failed: %v", err)
+				logger.Error("Gemini API 请求失败: %v", err)
 			}
 			lastErr = err.Error()
 			continue
 		}
 
-		logger.Debug("Gemini API response status: %d", resp.StatusCode)
+		logger.Debug("Gemini API 响应状态码: %d", resp.StatusCode)
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			bodyStr = string(body)
-			logger.Error("Gemini API returned status %d: %s", resp.StatusCode, bodyStr)
+			logger.Error("Gemini API 返回错误状态码 %d: %s", resp.StatusCode, bodyStr)
 			if isHTMLErrorResponse(bodyStr) {
-				logger.Warn("HTML error detected, marking session token as bad")
+				logger.Warn("检测到 HTML 错误响应，已标记会话令牌失效")
 				tokenManager.MarkSessionTokenBad(sessionKey)
 			}
 			lastErr = fmt.Sprintf("Gemini API error: %d", resp.StatusCode)
@@ -1247,16 +1263,16 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			logger.Error("Failed to read stream response: %v", err)
+			logger.Error("读取流式响应失败: %v", err)
 			lastErr = err.Error()
 			continue
 		}
 
-		logger.Debug("Stream response body size: %d bytes", len(body))
+		logger.Debug("流式响应体大小: %d 字节", len(body))
 		bodyStr = string(body)
 
 		if isHTMLErrorResponse(bodyStr) {
-			logger.Warn("HTML error detected in response body, marking session token as bad")
+			logger.Warn("响应体中检测到 HTML 错误，已标记会话令牌失效")
 			tokenManager.MarkSessionTokenBad(sessionKey)
 			lastErr = "Request failed due to token issue"
 			continue
@@ -1266,7 +1282,7 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 		content = filterContent(content)
 
 		if content == "" && isEmptyAcknowledgmentResponse(bodyStr) {
-			logger.Error("Received empty acknowledgment response in stream - token may be invalid or expired")
+			logger.Error("流式响应收到空的确认包 - 令牌可能已失效或过期")
 			tokenManager.MarkSessionTokenBad(sessionKey)
 			lastErr = "Gemini returned empty response - token issue"
 			continue
@@ -1277,7 +1293,7 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 	}
 
 	if lastErr != "" {
-		logger.Error("All %d retry attempts failed, last error: %s", maxRetries, lastErr)
+		logger.Error("所有 %d 次重试均失败，最后一次错误: %s", maxRetries, lastErr)
 		metrics.AddRequest(false, len(prompt)/4, 0)
 		writeError(w, http.StatusBadGateway, lastErr)
 		return
@@ -1298,7 +1314,7 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 	sendStreamChunkWithConversation(w, flusher, model, "", "assistant", false, session.ConversationID)
 
 	if content != "" {
-		logger.Debug("Extracted stream content (len=%d): %.100s", len(content), content)
+		logger.Debug("已提取流式内容 (长度=%d): %.100s", len(content), content)
 		cleanContent, toolCalls := parseToolCalls(content, tools)
 		cleanContent = filterContent(cleanContent)
 		if len(toolCalls) > 0 {
@@ -1319,7 +1335,7 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 	}
 	w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
-	logger.Info("Stream response completed in %.3fms", float64(time.Since(start).Microseconds())/1000)
+	logger.Info("流式响应完成，耗时 %.3fms", float64(time.Since(start).Microseconds())/1000)
 }
 
 func sendStreamChunk(w http.ResponseWriter, flusher http.Flusher, model string, content string, role string, isFinish bool) {
@@ -1433,25 +1449,25 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			logger.Info("Retry attempt %d/%d for non-stream request", attempt, maxRetries)
+			logger.Info("非流式请求正在进行第 %d/%d 次重试", attempt, maxRetries)
 			snlm0eToken, _ = tokenManager.GetTokenForSession(sessionKey, true)
 			time.Sleep(time.Duration(attempt*500) * time.Millisecond)
 		}
 
 		req, err := buildGeminiRequest(prompt, session, model, snlm0eToken)
 		if err != nil {
-			logger.Error("Failed to build Gemini request: %v", err)
+			logger.Error("构建 Gemini 请求失败: %v", err)
 			lastErr = err.Error()
 			continue
 		}
 
-		logger.Debug("Sending request to Gemini API...")
+		logger.Debug("正在发送请求到 Gemini API...")
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			if isConnectionError(err) {
-				logger.Warn("Connection error through proxy (attempt %d/%d): %v", attempt, maxRetries, err)
+				logger.Warn("通过代理连接出错 (尝试 %d/%d): %v", attempt, maxRetries, err)
 			} else {
-				logger.Error("Gemini API request failed: %v", err)
+				logger.Error("Gemini API 请求失败: %v", err)
 			}
 			lastErr = err.Error()
 			continue
@@ -1460,18 +1476,18 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			logger.Error("Failed to read response body: %v", err)
+			logger.Error("读取响应体失败: %v", err)
 			lastErr = err.Error()
 			continue
 		}
-		logger.Debug("Gemini API response status: %d", resp.StatusCode)
-		logger.Debug("Response body size: %d bytes", len(body))
+		logger.Debug("Gemini API 响应状态码: %d", resp.StatusCode)
+		logger.Debug("响应体大小: %d 字节", len(body))
 		bodyStr = string(body)
 
 		if resp.StatusCode != http.StatusOK {
-			logger.Error("Gemini API returned status %d: %s", resp.StatusCode, bodyStr)
+			logger.Error("Gemini API 返回错误状态码 %d: %s", resp.StatusCode, bodyStr)
 			if isHTMLErrorResponse(bodyStr) {
-				logger.Warn("HTML error detected, marking session token as bad")
+				logger.Warn("检测到 HTML 错误响应，已标记会话令牌失效")
 				tokenManager.MarkSessionTokenBad(sessionKey)
 			}
 			lastErr = fmt.Sprintf("Gemini API error: %d", resp.StatusCode)
@@ -1479,7 +1495,7 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		}
 
 		if isHTMLErrorResponse(bodyStr) {
-			logger.Warn("HTML error detected in response body, marking session token as bad")
+			logger.Warn("响应体中检测到 HTML 错误，已标记会话令牌失效")
 			tokenManager.MarkSessionTokenBad(sessionKey)
 			lastErr = "Request failed due to token issue"
 			continue
@@ -1489,9 +1505,9 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		content = filterContent(content)
 
 		if content == "" {
-			logger.Warn("Empty content extracted from response, body preview: %.500s", bodyStr)
+			logger.Warn("从响应中提取的内容为空，响应体预览: %.500s", bodyStr)
 			if isEmptyAcknowledgmentResponse(bodyStr) {
-				logger.Error("Received empty acknowledgment response - token may be invalid or expired")
+				logger.Error("收到空的确认响应 - 令牌可能已失效或过期")
 				tokenManager.MarkSessionTokenBad(sessionKey)
 				lastErr = "Gemini returned empty response - token issue"
 				continue
@@ -1503,7 +1519,7 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 	}
 
 	if lastErr != "" {
-		logger.Error("All %d retry attempts failed, last error: %s", maxRetries, lastErr)
+		logger.Error("所有 %d 次重试均失败，最后一次错误: %s", maxRetries, lastErr)
 		metrics.AddRequest(false, len(prompt)/4, 0)
 		writeError(w, http.StatusBadGateway, lastErr)
 		return
@@ -1516,8 +1532,9 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 	outputTokens := len(content) / 4
 	metrics.AddRequest(true, inputTokens, outputTokens)
 
-	logger.Info("Non-stream response completed in %.3fms, content length: %d",
+	logger.Info("非流式响应完成，耗时 %.3fms，内容长度: %d",
 		float64(time.Since(start).Microseconds())/1000, len(content))
+
 	finishReason := "stop"
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
@@ -1575,7 +1592,7 @@ func updateSessionFromResponse(session *GeminiSession, body string) {
 	}
 
 	if session.ConversationID != "" {
-		logger.Debug("Updated session: c=%s, r=%s, rc=%s", session.ConversationID, session.ResponseID, session.ChoiceID)
+		logger.Debug("会话已更新: c=%s, r=%s, rc=%s", session.ConversationID, session.ResponseID, session.ChoiceID)
 	}
 }
 
