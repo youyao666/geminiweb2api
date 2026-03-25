@@ -2,7 +2,7 @@
   "api_key": "meml",
   "token": "",
   "cookies": "",
-  "proxy": "",
+  "proxy": "http://127.0.0.1:7890",
   "gemini_url": "",
   "gemini_home_url": "",
   "port": 18060,

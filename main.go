@@ -468,7 +468,27 @@ func loadConfig() error {
 	configMutex.Lock()
 	defer configMutex.Unlock()
 
-	file, err := os.Open("config.json")
+	const configFile = "config.json"
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		defaultConfig := Config{
+			Port:     8080,
+			LogLevel: LogLevelInfo,
+			APIKey:   "your-api-key-here",
+			Proxy:    "",
+			Note:     []string{"Auto-generated config"},
+		}
+		data, err := json.MarshalIndent(defaultConfig, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal default config: %v", err)
+		}
+		if err := os.WriteFile(configFile, data, 0644); err != nil {
+			return fmt.Errorf("failed to write default config: %v", err)
+		}
+		config = defaultConfig
+		return nil
+	}
+
+	file, err := os.Open(configFile)
 	if err != nil {
 		return err
 	}
@@ -539,22 +559,31 @@ func initLogger() error {
 
 func initHTTPClient() {
 	cfg := getConfigSnapshot()
-	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
+	// 优化 Dialer 拨号设置，减少超时和重连时间
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second, // 建立 TCP 连接的超时时间
+		KeepAlive: 30 * time.Second, // 保持连接的探测频率
+		DualStack: true,             // 同时尝试 IPv4 和 IPv6
+	}
+
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           dialer.DialContext,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
+		MaxIdleConns:          100,              // 最大空闲连接数
+		IdleConnTimeout:       60 * time.Second, // 空闲连接的生命周期
+		TLSHandshakeTimeout:   8 * time.Second,  // TLS 握手超时时间
 		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConnsPerHost:   10, // 每个主机的最大空闲连接数
 	}
 
+	proxyConfigured := false
 	if strings.TrimSpace(cfg.Proxy) != "" {
-		proxyURL, err := url.Parse(strings.TrimSpace(cfg.Proxy))
+		proxyURLStr := strings.TrimSpace(cfg.Proxy)
+		proxyURL, err := url.Parse(proxyURLStr)
 		if err == nil {
 			transport.Proxy = http.ProxyURL(proxyURL)
-			logger.Info("Using proxy: %s", cfg.Proxy)
+			proxyConfigured = true
 		} else {
 			logger.Warn("Invalid proxy URL: %s, falling back to env proxy, error: %v", cfg.Proxy, err)
 		}
@@ -562,9 +591,51 @@ func initHTTPClient() {
 
 	httpClient = &http.Client{
 		Transport: transport,
-		Timeout:   120 * time.Second,
+		Timeout:   120 * time.Second, // 全局 HTTP 请求超时时间
 	}
-	logger.Info("HTTP client initialized")
+
+	if proxyConfigured {
+		go testProxyConnectivity(cfg.Proxy)
+	} else {
+		logger.Info("HTTP client initialized without explicit proxy")
+	}
+}
+
+// testProxyConnectivity 在后台测试代理连接性，并打印详细日志
+func testProxyConnectivity(proxyStr string) {
+	logger.Info("Testing proxy connectivity: %s", proxyStr)
+
+	// 尝试通过代理访问 Google 首页进行快速连接测试
+	testURL := "https://www.google.com"
+	req, _ := http.NewRequest("HEAD", testURL, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	// 使用当前配置的 httpClient
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		logger.Warn("Proxy check failed (this might be temporary): %v. Requests will still be attempted with retries.", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		logger.Info("Proxy connectivity verified successfully via %s", proxyStr)
+	} else {
+		logger.Warn("Proxy check returned unexpected status: %d. Please check your proxy settings.", resp.StatusCode)
+	}
+}
+
+// isConnectionError 判断是否为网络层连接错误
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "proxy") ||
+		strings.Contains(errStr, "dial") ||
+		strings.Contains(errStr, "eof")
 }
 func fetchToken() error {
 	cfg := getConfigSnapshot()
@@ -736,6 +807,9 @@ func init() {
 }
 
 func main() {
+	println("=============== Gemini Web 2 API =====================")
+	println("作者: MapleLeaf QQ交流群号: 1081291958")
+	println("======================================================")
 	if err := loadConfig(); err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -1147,7 +1221,11 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 		logger.Debug("Sending request to Gemini API...")
 		resp, err := httpClient.Do(req)
 		if err != nil {
-			logger.Error("Gemini API request failed: %v", err)
+			if isConnectionError(err) {
+				logger.Warn("Connection error through proxy (attempt %d/%d): %v", attempt, maxRetries, err)
+			} else {
+				logger.Error("Gemini API request failed: %v", err)
+			}
 			lastErr = err.Error()
 			continue
 		}
@@ -1370,7 +1448,11 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		logger.Debug("Sending request to Gemini API...")
 		resp, err := httpClient.Do(req)
 		if err != nil {
-			logger.Error("Gemini API request failed: %v", err)
+			if isConnectionError(err) {
+				logger.Warn("Connection error through proxy (attempt %d/%d): %v", attempt, maxRetries, err)
+			} else {
+				logger.Error("Gemini API request failed: %v", err)
+			}
 			lastErr = err.Error()
 			continue
 		}
