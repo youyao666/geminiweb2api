@@ -17,7 +17,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	_ "embed"
 )
+
+//go:embed index.html
+var indexHTML []byte
 
 const (
 	GeminiURL = "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate"
@@ -781,10 +786,6 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func handleTelemetry(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
 	note := getConfigSnapshot().Note
 
 	uptime := time.Since(metrics.StartTime).Seconds()
@@ -800,6 +801,15 @@ func handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		"note":             note,
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func handleWebUI(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(indexHTML)
 }
 
 func init() {
@@ -839,7 +849,8 @@ func main() {
 	startConfigWatcher()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleTelemetry)
+	mux.HandleFunc("/", handleWebUI)
+	mux.HandleFunc("/api/telemetry", handleTelemetry)
 	mux.HandleFunc("/v1/models", loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			logger.Warn("接口 /v1/models 收到无效的请求方法: %s", r.Method)

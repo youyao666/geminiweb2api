@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gemini Web 2 API</title>
+    <style>
+      /* Material Design 3 核心变量 (Light Theme 示例色板) */
+      :root {
+        --md-sys-color-primary: #0061a4;
+        --md-sys-color-on-primary: #ffffff;
+        --md-sys-color-primary-container: #d1e4ff;
+        --md-sys-color-on-primary-container: #001d36;
+
+        --md-sys-color-secondary: #535f70;
+        --md-sys-color-on-secondary: #ffffff;
+        --md-sys-color-secondary-container: #d7e3f7;
+        --md-sys-color-on-secondary-container: #101c2b;
+
+        --md-sys-color-tertiary: #6b5778;
+        --md-sys-color-tertiary-container: #f2daff;
+        --md-sys-color-on-tertiary-container: #251431;
+
+        --md-sys-color-error: #ba1a1a;
+        --md-sys-color-error-container: #ffdad6;
+        --md-sys-color-on-error-container: #410002;
+
+        --md-sys-color-background: #fdfcff;
+        --md-sys-color-on-background: #1a1c1e;
+        --md-sys-color-surface: #fdfcff;
+        --md-sys-color-on-surface: #1a1c1e;
+
+        --md-sys-color-surface-variant: #dfe2eb;
+        --md-sys-color-on-surface-variant: #43474e;
+
+        --md-sys-color-outline: #73777f;
+        --md-sys-color-outline-variant: #c3c7cf;
+
+        /* Elevation (高度/阴影) */
+        --md-sys-elevation-1:
+          0px 1px 2px 0px rgba(0, 0, 0, 0.3),
+          0px 1px 3px 1px rgba(0, 0, 0, 0.15);
+        --md-sys-elevation-2:
+          0px 1px 2px 0px rgba(0, 0, 0, 0.3),
+          0px 2px 6px 2px rgba(0, 0, 0, 0.15);
+
+        /* 字体排版 */
+        --md-sys-typescale-display-small: 400 36px/44px "Roboto", sans-serif;
+        --md-sys-typescale-title-large: 400 22px/28px "Roboto", sans-serif;
+        --md-sys-typescale-title-medium: 500 16px/24px "Roboto", sans-serif;
+        --md-sys-typescale-body-large: 400 16px/24px "Roboto", sans-serif;
+        --md-sys-typescale-body-medium: 400 14px/20px "Roboto", sans-serif;
+        --md-sys-typescale-label-large: 500 14px/20px "Roboto", sans-serif;
+      }
+
+      @import url("https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap");
+
+      body {
+        font-family:
+          "Roboto",
+          system-ui,
+          -apple-system,
+          sans-serif;
+        background-color: var(--md-sys-color-background);
+        color: var(--md-sys-color-on-background);
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* 顶部应用栏 (Top App Bar) */
+      .top-app-bar {
+        background-color: var(--md-sys-color-surface);
+        color: var(--md-sys-color-on-surface);
+        height: 64px;
+        display: flex;
+        align-items: center;
+        padding: 0 16px;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        box-shadow: 0 1px 0 var(--md-sys-color-outline-variant);
+      }
+
+      .top-app-bar > svg {
+        width: 24px;
+        height: 24px;
+        fill: currentColor;
+      }
+
+      .top-app-bar .title {
+        font: var(--md-sys-typescale-title-large);
+        margin-left: 16px;
+        flex-grow: 1;
+      }
+
+      .top-app-bar .status-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 12px;
+        border-radius: 8px;
+        font: var(--md-sys-typescale-label-large);
+        background-color: var(--md-sys-color-secondary-container);
+        color: var(--md-sys-color-on-secondary-container);
+        gap: 6px;
+      }
+      .status-chip.running {
+        background-color: #c4eed0;
+        color: #003820;
+      }
+      .status-chip.error {
+        background-color: var(--md-sys-color-error-container);
+        color: var(--md-sys-color-on-error-container);
+      }
+
+      .status-chip svg {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+      }
+
+      /* 主体内容区 */
+      .main-content {
+        padding: 24px;
+        max-width: 1200px;
+        margin: 0 auto;
+        width: 100%;
+        box-sizing: border-box;
+        flex-grow: 1;
+      }
+
+      /* 欢迎区域 */
+      .hero {
+        margin-bottom: 32px;
+      }
+      .hero h2 {
+        font: var(--md-sys-typescale-display-small);
+        margin: 0 0 8px 0;
+        color: var(--md-sys-color-primary);
+      }
+      .hero p {
+        font: var(--md-sys-typescale-body-large);
+        color: var(--md-sys-color-on-surface-variant);
+        margin: 0;
+      }
+
+      /* 卡片网格布局 */
+      .grid-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 24px;
+        margin-bottom: 32px;
+      }
+
+      /* MD3 风格卡片 (Elevated Card) */
+      .md-card {
+        background-color: var(--md-sys-color-surface);
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: var(--md-sys-elevation-1);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        transition: box-shadow 0.2s cubic-bezier(0.2, 0, 0, 1);
+      }
+
+      .md-card:hover {
+        box-shadow: var(--md-sys-elevation-2);
+      }
+
+      .md-card-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .md-card-header .icon {
+        color: var(--md-sys-color-primary);
+        background-color: var(--md-sys-color-primary-container);
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .md-card-header .icon svg {
+        width: 24px;
+        height: 24px;
+        fill: currentColor;
+      }
+
+      /* 针对不同指标的图标颜色 */
+      .md-card.error-card .icon {
+        color: var(--md-sys-color-error);
+        background-color: var(--md-sys-color-error-container);
+      }
+      .md-card.tertiary-card .icon {
+        color: var(--md-sys-color-tertiary);
+        background-color: var(--md-sys-color-tertiary-container);
+      }
+
+      .md-card-title {
+        font: var(--md-sys-typescale-title-medium);
+        color: var(--md-sys-color-on-surface);
+        margin: 0;
+      }
+
+      .md-card-value {
+        font: var(--md-sys-typescale-display-small);
+        color: var(--md-sys-color-on-surface);
+        margin: 0;
+      }
+
+      /* 填充卡片 (Filled Card) - 用于备注信息 */
+      .md-card-filled {
+        background-color: var(--md-sys-color-surface-variant);
+        border-radius: 12px;
+        padding: 24px;
+        color: var(--md-sys-color-on-surface-variant);
+      }
+
+      .md-card-filled h3 {
+        font: var(--md-sys-typescale-title-large);
+        margin: 0 0 16px 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .md-card-filled h3 svg {
+        width: 24px;
+        height: 24px;
+        fill: currentColor;
+      }
+
+      .md-card-filled p {
+        font: var(--md-sys-typescale-body-medium);
+        white-space: pre-wrap;
+        margin: 0;
+        line-height: 1.6;
+      }
+
+      /* 底部信息 */
+      footer {
+        text-align: center;
+        padding: 24px;
+        font: var(--md-sys-typescale-body-medium);
+        color: var(--md-sys-color-outline);
+      }
+
+      /* 响应式调整 */
+      @media (max-width: 600px) {
+        .hero h2 {
+          font-size: 28px;
+          line-height: 36px;
+        }
+        .grid-container {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 顶部应用栏 -->
+    <header class="top-app-bar">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+      <div class="title">API Dashboard</div>
+      <div class="status-chip" id="status-chip">
+        <svg id="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        <span id="status-text">连接中...</span>
+      </div>
+    </header>
+
+    <!-- 主体内容 -->
+    <main class="main-content">
+      <div class="hero">
+        <h2>Gemini Web 2 API</h2>
+        <p>实时遥测数据监控</p>
+      </div>
+
+      <div class="grid-container">
+        <div class="md-card">
+          <div class="md-card-header">
+            <div class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/><path d="M12.5 7H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
+            </div>
+            <h3 class="md-card-title">系统在线时长</h3>
+          </div>
+          <div class="md-card-value" id="uptime">--</div>
+        </div>
+
+        <div class="md-card">
+          <div class="md-card-header">
+            <div class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19.03 7.39l1.42-1.42c-4.37-3.92-11.11-3.92-15.48 0l1.42 1.42c3.59-3.21 9.06-3.21 12.64 0zm-2.83 2.83l1.42-1.42c-2.81-2.52-7.14-2.52-9.95 0l1.42 1.42c2.03-1.81 5.09-1.81 7.11 0zM12 13c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+            </div>
+            <h3 class="md-card-title">当前 RPM</h3>
+          </div>
+          <div class="md-card-value" id="rpm">--</div>
+        </div>
+
+        <div class="md-card">
+          <div class="md-card-header">
+            <div class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+            </div>
+            <h3 class="md-card-title">总处理请求数</h3>
+          </div>
+          <div class="md-card-value" id="total_requests">--</div>
+        </div>
+
+        <div class="md-card">
+          <div class="md-card-header">
+            <div class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            </div>
+            <h3 class="md-card-title">成功请求</h3>
+          </div>
+          <div class="md-card-value" id="success_requests">--</div>
+        </div>
+
+        <div class="md-card error-card">
+          <div class="md-card-header">
+            <div class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+            </div>
+            <h3 class="md-card-title">失败请求</h3>
+          </div>
+          <div class="md-card-value" id="failed_requests">--</div>
+        </div>
+
+        <div class="md-card tertiary-card">
+          <div class="md-card-header">
+            <div class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 9h-2V7h-2v5H6l4 4 4-4z"/></svg>
+            </div>
+            <h3 class="md-card-title">消耗 Tokens (输入)</h3>
+          </div>
+          <div class="md-card-value" id="input_tokens">--</div>
+        </div>
+
+        <div class="md-card tertiary-card">
+          <div class="md-card-header">
+            <div class="icon">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 9h-2v5h-2v-5H8l4-4 4 4z"/></svg>
+            </div>
+            <h3 class="md-card-title">消耗 Tokens (输出)</h3>
+          </div>
+          <div class="md-card-value" id="output_tokens">--</div>
+        </div>
+      </div>
+
+      <div class="md-card-filled">
+        <h3>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+          运行备注
+        </h3>
+        <p id="note">加载中...</p>
+      </div>
+    </main>
+
+    <footer>
+      <p>由 Gemini Web 2 API 驱动 | 作者: XxxXTeam</p>
+    </footer>
+
+    <script>
+      function formatUptime(seconds) {
+        if (isNaN(seconds) || seconds < 0) return "--";
+        const d = Math.floor(seconds / (3600 * 24));
+        const h = Math.floor((seconds % (3600 * 24)) / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+
+        let result = "";
+        if (d > 0) result += `${d}d `;
+        if (h > 0 || d > 0) result += `${h}h `;
+        if (m > 0 || h > 0 || d > 0) result += `${m}m `;
+        result += `${s}s`;
+        return result.trim();
+      }
+
+      function updateStatus(isOnline) {
+        const chip = document.getElementById("status-chip");
+        const icon = document.getElementById("status-icon");
+        const text = document.getElementById("status-text");
+
+        chip.className = "status-chip"; // reset
+        if (isOnline) {
+          chip.classList.add("running");
+          // check_circle
+          icon.innerHTML = '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>';
+          text.textContent = "运行中";
+        } else {
+          chip.classList.add("error");
+          // cloud_off
+          icon.innerHTML = '<path d="M19.35 10.04C18.67 6.59 15.64 4 12 4c-1.48 0-2.85.43-4.01 1.17l1.46 1.46C10.21 6.23 11.08 6 12 6c3.04 0 5.5 2.46 5.5 5.5v.5H19c1.66 0 3 1.34 3 3 0 1.13-.64 2.11-1.56 2.62l1.45 1.45C23.16 18.16 24 16.68 24 15c0-2.64-2.05-4.78-4.65-4.96zM3 5.27l2.75 2.74C2.56 8.15 0 10.77 0 14c0 3.31 2.69 6 6 6h11.73l2 2 1.41-1.41L4.41 3.86 3 5.27zM7.73 10l8 8H6c-2.21 0-4-1.79-4-4s1.79-4 4-4h1.73z"/>';
+          text.textContent = "已离线";
+        }
+      }
+
+      async function fetchData() {
+        try {
+          const response = await fetch("/api/telemetry");
+          if (!response.ok)
+            throw new Error(`HTTP error! status: ${response.status}`);
+          const data = await response.json();
+
+          updateStatus(true);
+          document.getElementById("uptime").textContent = formatUptime(
+            data.uptime_seconds,
+          );
+          document.getElementById("rpm").textContent = data.rpm.toFixed(1);
+          document.getElementById("total_requests").textContent =
+            data.total_requests.toLocaleString();
+          document.getElementById("success_requests").textContent =
+            data.success_requests.toLocaleString();
+          document.getElementById("failed_requests").textContent =
+            data.failed_requests.toLocaleString();
+          document.getElementById("input_tokens").textContent =
+            data.input_tokens.toLocaleString();
+          document.getElementById("output_tokens").textContent =
+            data.output_tokens.toLocaleString();
+
+          const noteElement = document.getElementById("note");
+          if (data.note && data.note.length > 0) {
+            noteElement.textContent = data.note.join("\n");
+          } else {
+            noteElement.textContent = "当前没有运行备注。";
+          }
+        } catch (error) {
+          console.error("获取数据失败:", error);
+          updateStatus(false);
+        }
+      }
+
+      // 初始加载及定时刷新
+      fetchData();
+      setInterval(fetchData, 5000);
+    </script>
+  </body>
+</html>
