@@ -24,6 +24,9 @@ import (
 //go:embed index.html
 var indexHTML []byte
 
+//go:embed help.html
+var helpHTML []byte
+
 const (
 	GeminiURL = "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate"
 	/*
@@ -259,24 +262,82 @@ const (
 )
 
 type Logger struct {
-	infoLog  *log.Logger
-	warnLog  *log.Logger
-	errorLog *log.Logger
-	debugLog *log.Logger
-	level    string
+	level string
+
+	consoleInfo  *log.Logger
+	consoleWarn  *log.Logger
+	consoleError *log.Logger
+	consoleDebug *log.Logger
+
+	fileInfo  *log.Logger
+	fileWarn  *log.Logger
+	fileError *log.Logger
+	fileDebug *log.Logger
 }
 
 var logger *Logger
 
-func newLogger(level string, w io.Writer) *Logger {
-	flags := log.Ldate | log.Ltime | log.Lmicroseconds
-	l := &Logger{
-		infoLog:  log.New(w, "[INFO]  ", flags),
-		warnLog:  log.New(w, "[WARN]  ", flags),
-		errorLog: log.New(w, "[ERROR] ", flags),
-		debugLog: log.New(w, "[DEBUG] ", flags),
-		level:    level,
+func shouldColorizeConsole() bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
 	}
+	if os.Getenv("CLICOLOR") == "0" {
+		return false
+	}
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+func levelPrefix(level string, colored bool) string {
+	switch level {
+	case "DEBUG":
+		if colored {
+			return "\x1b[36m[DEBUG]\x1b[0m "
+		}
+		return "[DEBUG] "
+	case "INFO":
+		if colored {
+			return "\x1b[32m[INFO]\x1b[0m  "
+		}
+		return "[INFO]  "
+	case "WARN":
+		if colored {
+			return "\x1b[33m[WARN]\x1b[0m  "
+		}
+		return "[WARN]  "
+	case "ERROR":
+		if colored {
+			return "\x1b[31m[ERROR]\x1b[0m "
+		}
+		return "[ERROR] "
+	default:
+		if colored {
+			return "\x1b[90m[LOG]\x1b[0m   "
+		}
+		return "[LOG]   "
+	}
+}
+
+func newLogger(level string, console io.Writer, file io.Writer) *Logger {
+	flags := log.Ldate | log.Ltime | log.Lmicroseconds
+	useColor := shouldColorizeConsole()
+	l := &Logger{level: level}
+
+	l.consoleInfo = log.New(console, levelPrefix("INFO", useColor), flags)
+	l.consoleWarn = log.New(console, levelPrefix("WARN", useColor), flags)
+	l.consoleError = log.New(console, levelPrefix("ERROR", useColor), flags)
+	l.consoleDebug = log.New(console, levelPrefix("DEBUG", useColor), flags)
+
+	if file != nil {
+		l.fileInfo = log.New(file, levelPrefix("INFO", false), flags)
+		l.fileWarn = log.New(file, levelPrefix("WARN", false), flags)
+		l.fileError = log.New(file, levelPrefix("ERROR", false), flags)
+		l.fileDebug = log.New(file, levelPrefix("DEBUG", false), flags)
+	}
+
 	return l
 }
 
@@ -313,24 +374,36 @@ func currentGeminiEndpoints() geminiEndpoints {
 
 func (l *Logger) Debug(format string, v ...interface{}) {
 	if l.level == LogLevelDebug {
-		l.debugLog.Printf(format, v...)
+		l.consoleDebug.Printf(format, v...)
+		if l.fileDebug != nil {
+			l.fileDebug.Printf(format, v...)
+		}
 	}
 }
 
 func (l *Logger) Info(format string, v ...interface{}) {
 	if l.level == LogLevelDebug || l.level == LogLevelInfo {
-		l.infoLog.Printf(format, v...)
+		l.consoleInfo.Printf(format, v...)
+		if l.fileInfo != nil {
+			l.fileInfo.Printf(format, v...)
+		}
 	}
 }
 
 func (l *Logger) Warn(format string, v ...interface{}) {
 	if l.level != LogLevelError {
-		l.warnLog.Printf(format, v...)
+		l.consoleWarn.Printf(format, v...)
+		if l.fileWarn != nil {
+			l.fileWarn.Printf(format, v...)
+		}
 	}
 }
 
 func (l *Logger) Error(format string, v ...interface{}) {
-	l.errorLog.Printf(format, v...)
+	l.consoleError.Printf(format, v...)
+	if l.fileError != nil {
+		l.fileError.Printf(format, v...)
+	}
 }
 
 func getRequestID() uint64 {
@@ -547,18 +620,16 @@ func startConfigWatcher() {
 
 func initLogger() error {
 	cfg := getConfigSnapshot()
-	var output *os.File
-	var err error
-
-	if cfg.LogFile != "" {
-		output, err = os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-		if err != nil {
-			return err
-		}
-		logger = newLogger(cfg.LogLevel, io.MultiWriter(os.Stdout, output))
-	} else {
-		logger = newLogger(cfg.LogLevel, os.Stdout)
+	if cfg.LogFile == "" {
+		logger = newLogger(cfg.LogLevel, os.Stdout, nil)
+		return nil
 	}
+
+	output, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		return err
+	}
+	logger = newLogger(cfg.LogLevel, os.Stdout, output)
 	return nil
 }
 
@@ -812,6 +883,15 @@ func handleWebUI(w http.ResponseWriter, r *http.Request) {
 	w.Write(indexHTML)
 }
 
+func handleHelpUI(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/help" && r.URL.Path != "/help/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(helpHTML)
+}
+
 func init() {
 	rand2.Seed(time.Now().UnixNano())
 }
@@ -836,7 +916,9 @@ func main() {
 	println("使用说明:")
 	println("- API端口: " + fmt.Sprintf("%d", getConfigSnapshot().Port))
 	println("- 核心接口: /v1/chat/completions")
-	println("- 监控接口: / (查看运行状态与 Token 消耗)")
+	println("- 监控面板: / (Dashboard)")
+	println("- 遥测接口: /api/telemetry (JSON)")
+	println("- 帮助文档: /help (教程 + 示例)")
 	println("======================================================")
 
 	if err := initLogger(); err != nil {
@@ -850,6 +932,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleWebUI)
+	mux.HandleFunc("/help", handleHelpUI)
+	mux.HandleFunc("/help/", handleHelpUI)
 	mux.HandleFunc("/api/telemetry", handleTelemetry)
 	mux.HandleFunc("/v1/models", loggingMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
