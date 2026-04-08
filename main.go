@@ -60,6 +60,7 @@ func main() {
 				{ID: "gemini-3-flash", Object: "model", Created: now, OwnedBy: "google"},
 				{ID: "gemini-3", Object: "model", Created: now, OwnedBy: "google"},
 				{ID: "gemini-3-pro", Object: "model", Created: now, OwnedBy: "google"},
+				{ID: "gemini-3.1-pro", Object: "model", Created: now, OwnedBy: "google"},
 				{ID: "gemini-2.5-flash", Object: "model", Created: now, OwnedBy: "google"},
 				{ID: "gemini-2.5-pro", Object: "model", Created: now, OwnedBy: "google"},
 				{ID: "gemini-2-flash", Object: "model", Created: now, OwnedBy: "google"},

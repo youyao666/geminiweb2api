@@ -128,6 +128,8 @@ var modelIDMap = map[string]string{
 	"gemini-3":                 "1640bdc9f7ef4826",
 	"gemini-2.5-flash":         "e6fa609c3fa255c0",
 	"gemini-2.5-pro":           "9d8ca3786ebdfbea",
+	"gemini-3.1-pro":           "9d8ca3786ebdfbea",
+	"gemini-3.1":               "9d8ca3786ebdfbea",
 	"gemini-2-flash":           "203e6bb81620bcfe",
 	"gemini-2.0-flash":         "203e6bb81620bcfe",
 	"gemini-flash":             "1640bdc9f7ef4826",
@@ -343,7 +345,7 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 		return nil, err
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 	req.Header.Set("accept-language", "zh-CN")
 	if cfg := getConfigSnapshot(); cfg.Cookies != "" {
@@ -354,16 +356,16 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	req.Header.Set("pragma", "no-cache")
 	req.Header.Set("priority", "u=1, i")
 	req.Header.Set("referer", endpoints.referer)
-	req.Header.Set("sec-ch-ua", `"Not;A=Brand";v="24", "Chromium";v="128"`)
+	req.Header.Set("sec-ch-ua", `"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"`)
 	req.Header.Set("sec-ch-ua-arch", `"x86"`)
 	req.Header.Set("sec-ch-ua-bitness", `"64"`)
 	req.Header.Set("sec-ch-ua-form-factors", `"Desktop"`)
-	req.Header.Set("sec-ch-ua-full-version", `"128.0.6568.0"`)
-	req.Header.Set("sec-ch-ua-full-version-list", `"Not;A=Brand";v="24.0.0.0", "Chromium";v="128.0.6568.0"`)
+	req.Header.Set("sec-ch-ua-full-version", `"146.0.7680.179"`)
+	req.Header.Set("sec-ch-ua-full-version-list", `"Chromium";v="146.0.7680.179", "Not-A.Brand";v="24.0.0.0", "Google Chrome";v="146.0.7680.179"`)
 	req.Header.Set("sec-ch-ua-mobile", "?0")
 	req.Header.Set("sec-ch-ua-model", `""`)
-	req.Header.Set("sec-ch-ua-platform", `"Linux"`)
-	req.Header.Set("sec-ch-ua-platform-version", `"6.14.0"`)
+	req.Header.Set("sec-ch-ua-platform", `"Windows"`)
+	req.Header.Set("sec-ch-ua-platform-version", `"19.0.0"`)
 	req.Header.Set("sec-ch-ua-wow64", "?0")
 	req.Header.Set("sec-fetch-dest", "empty")
 	req.Header.Set("sec-fetch-mode", "cors")
