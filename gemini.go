@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -294,6 +296,8 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 }
 
 func buildGeminiRequest(prompt string, session *GeminiSession, modelName string, snlm0eToken string) (*http.Request, error) {
+	refreshTokenIfNeeded()
+
 	uuid := generateUUIDv4()
 	modelID := modelIDMap["gemini-3-flash"]
 	if id, ok := modelIDMap[modelName]; ok {
@@ -340,11 +344,17 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	data := url.Values{}
 	data.Set("f.req", freqData)
 	endpoints := currentGeminiEndpoints()
-	req, err := http.NewRequest("POST", endpoints.url, strings.NewReader(data.Encode()))
+	requestURL, err := buildGeminiRequestURL(endpoints.url)
 	if err != nil {
 		return nil, err
 	}
 
+	req, err := http.NewRequest("POST", requestURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 	req.Header.Set("accept-language", "zh-CN")
@@ -370,11 +380,43 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	req.Header.Set("sec-fetch-dest", "empty")
 	req.Header.Set("sec-fetch-mode", "cors")
 	req.Header.Set("sec-fetch-site", "same-origin")
+	req.Header.Set("x-goog-ext-525005358-jspb", fmt.Sprintf(`["%s",1]`, uuid))
+	req.Header.Set("x-goog-ext-73010989-jspb", "[0]")
+	req.Header.Set("x-goog-ext-73010990-jspb", "[0]")
+	req.Header.Set("x-same-domain", "1")
 	randomIP := generateRandomIP()
 	req.Header.Set("X-Forwarded-For", randomIP)
 	req.Header.Set("X-Real-IP", randomIP)
 	logger.Debug("正在使用随机 XFF IP: %s", randomIP)
 	return req, nil
+}
+
+func buildGeminiRequestURL(rawURL string) (string, error) {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+
+	query := parsedURL.Query()
+	if query.Get("hl") == "" {
+		query.Set("hl", "zh-CN")
+	}
+	if query.Get("rt") == "" {
+		query.Set("rt", "c")
+	}
+	if query.Get("bl") == "" {
+		if blToken := getBLToken(); blToken != "" {
+			query.Set("bl", blToken)
+		}
+	}
+	if query.Get("f.sid") == "" {
+		if fsid := getFSID(); fsid != "" {
+			query.Set("f.sid", fsid)
+		}
+	}
+	query.Set("_reqid", nextReqID())
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String(), nil
 }
 
 func handleStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string) {
@@ -422,10 +464,8 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		body, err := readResponseBody(resp, "流式")
 		if err != nil {
-			logger.Error("读取流式响应失败: %v", err)
 			lastErr = err.Error()
 			continue
 		}
@@ -481,7 +521,7 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 		if len(toolCalls) > 0 {
 			sendStreamChunkWithTools(w, flusher, model, cleanContent, toolCalls)
 		} else {
-			sendStreamChunk(w, flusher, model, content, "", false)
+			sendStreamChunk(w, flusher, model, cleanContent, "", false)
 		}
 	}
 
@@ -603,10 +643,8 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		body, err := readResponseBody(resp, "非流式")
 		if err != nil {
-			logger.Error("读取响应体失败: %v", err)
 			lastErr = err.Error()
 			continue
 		}
@@ -722,6 +760,10 @@ func updateSessionFromResponse(session *GeminiSession, body string) {
 }
 
 func extractFinalContent(body string) string {
+	if content := extractContentFromWrbFrames(body); content != "" {
+		return content
+	}
+
 	var contents []string
 	patterns := []struct {
 		startPattern string
@@ -776,13 +818,140 @@ func extractFinalContent(body string) string {
 		}
 	}
 
-	longest := ""
-	for _, c := range contents {
-		if len(c) > len(longest) {
-			longest = c
+	return assembleContentFragments(contents)
+}
+
+func extractContentFromWrbFrames(body string) string {
+	lines := strings.Split(body, "\n")
+	best := ""
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "[[") {
+			continue
+		}
+
+		var frames []interface{}
+		if err := json.Unmarshal([]byte(line), &frames); err != nil {
+			continue
+		}
+
+		for _, frame := range frames {
+			frameItems, ok := frame.([]interface{})
+			if !ok || len(frameItems) < 3 {
+				continue
+			}
+
+			eventName, _ := frameItems[0].(string)
+			if eventName != "wrb.fr" {
+				continue
+			}
+
+			payload, _ := frameItems[2].(string)
+			if payload == "" {
+				continue
+			}
+
+			candidate := extractContentFromPayload(payload)
+			if len(candidate) > len(best) {
+				best = candidate
+			}
 		}
 	}
-	return unescapeContent(longest)
+
+	return best
+}
+
+func extractContentFromPayload(payload string) string {
+	var data interface{}
+	if err := json.Unmarshal([]byte(payload), &data); err != nil {
+		return ""
+	}
+
+	best := ""
+	visitRCNodes(data, &best)
+	return strings.TrimSpace(best)
+}
+
+func visitRCNodes(node interface{}, best *string) {
+	switch value := node.(type) {
+	case []interface{}:
+		if text, ok := extractRCText(value); ok && len(text) > len(*best) {
+			*best = text
+		}
+		for _, item := range value {
+			visitRCNodes(item, best)
+		}
+	}
+}
+
+func extractRCText(items []interface{}) (string, bool) {
+	if len(items) < 2 {
+		return "", false
+	}
+
+	id, ok := items[0].(string)
+	if !ok || !strings.HasPrefix(id, "rc_") {
+		return "", false
+	}
+
+	textItems, ok := items[1].([]interface{})
+	if !ok || len(textItems) == 0 {
+		return "", false
+	}
+
+	text, ok := textItems[0].(string)
+	if !ok {
+		return "", false
+	}
+
+	return strings.TrimSpace(unescapeContent(text)), text != ""
+}
+
+func assembleContentFragments(contents []string) string {
+	assembled := ""
+	for _, raw := range contents {
+		part := strings.TrimSpace(unescapeContent(raw))
+		if part == "" {
+			continue
+		}
+		if assembled == "" {
+			assembled = part
+			continue
+		}
+		if strings.Contains(assembled, part) {
+			continue
+		}
+		if strings.Contains(part, assembled) {
+			assembled = part
+			continue
+		}
+
+		if overlap := suffixPrefixOverlap(assembled, part); overlap > 0 {
+			assembled += part[overlap:]
+			continue
+		}
+		if overlap := suffixPrefixOverlap(part, assembled); overlap > 0 {
+			assembled = part + assembled[overlap:]
+			continue
+		}
+
+		assembled += part
+	}
+	return assembled
+}
+
+func suffixPrefixOverlap(left string, right string) int {
+	limit := len(left)
+	if len(right) < limit {
+		limit = len(right)
+	}
+	for size := limit; size >= 8; size-- {
+		if left[len(left)-size:] == right[:size] {
+			return size
+		}
+	}
+	return 0
 }
 
 func extractQuotedString(s string) (string, int) {
@@ -807,24 +976,51 @@ func extractQuotedString(s string) (string, int) {
 }
 
 func unescapeContent(s string) string {
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	return s
+	if s == "" {
+		return ""
+	}
+
+	current := s
+	for i := 0; i < 3; i++ {
+		decoded, err := strconv.Unquote(`"` + strings.ReplaceAll(current, `"`, `\"`) + `"`)
+		if err != nil || decoded == current {
+			break
+		}
+		current = decoded
+	}
+
+	replacer := strings.NewReplacer(
+		`\\n`, "\n",
+		`\n`, "\n",
+		`\\r`, "\r",
+		`\r`, "\r",
+		`\\t`, "\t",
+		`\t`, "\t",
+		`\\\"`, `"`,
+		`\"`, `"`,
+		`\\\\`, `\`,
+	)
+	return replacer.Replace(current)
+}
+
+func readResponseBody(resp *http.Response, mode string) ([]byte, error) {
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err == nil {
+		return body, nil
+	}
+
+	if isRetryableBodyReadError(err) && len(body) > 0 {
+		logger.Warn("%s响应读取不完整，已使用部分响应继续处理: %v (已读 %d 字节)", mode, err, len(body))
+		return body, nil
+	}
+
+	logger.Error("读取%s响应体失败: %v", mode, err)
+	return nil, err
+}
+
+func isRetryableBodyReadError(err error) bool {
+	return errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(strings.ToLower(err.Error()), "unexpected eof")
 }
 
 func parseGeminiErrorCode(body string) (int, string) {

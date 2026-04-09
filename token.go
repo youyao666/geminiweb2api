@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -12,6 +14,8 @@ import (
 type TokenInfo struct {
 	SNlM0e    string
 	BLToken   string
+	FSID      string
+	ReqID     int64
 	FetchedAt time.Time
 	mutex     sync.RWMutex
 }
@@ -31,6 +35,12 @@ type TokenManager struct {
 
 var tokenManager = &TokenManager{
 	sessionTokens: make(map[string]*AnonToken),
+}
+
+type pageState struct {
+	RequestToken string
+	BLToken      string
+	FSID         string
 }
 
 func (tm *TokenManager) Init() {}
@@ -63,27 +73,14 @@ func (tm *TokenManager) FetchAnonymousToken() (string, error) {
 		return "", fmt.Errorf("read body failed: %v", err)
 	}
 
-	patterns := []string{
-		`"SNlM0e":"([^"]+)"`,
-		`SNlM0e\\x22:\\x22([^\\]+)\\x22`,
-		`WIZ_global_data[^}]*"SNlM0e":"([^"]+)"`,
-		`SNlM0e\\":\\"([^\\]+)\\"`,
-		`"SNlM0e"\s*:\s*"([^"]+)"`,
+	state := extractPageState(body)
+	updateTokenInfoFromState(state)
+	if state.RequestToken != "" {
+		logger.Debug("成功获取匿名请求令牌 (长度=%d)", len(state.RequestToken))
+		return state.RequestToken, nil
 	}
 
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindSubmatch(body)
-		if len(matches) > 1 {
-			snlm0e := string(matches[1])
-			if len(snlm0e) > 10 {
-				logger.Debug("成功获取匿名 SNlM0e 令牌 (长度=%d)", len(snlm0e))
-				return snlm0e, nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("SNlM0e not found in anonymous page")
+	return "", fmt.Errorf("request token not found in anonymous page")
 }
 
 func (tm *TokenManager) GetTokenForSession(sessionKey string, isNewSession bool) (string, int) {
@@ -159,52 +156,11 @@ func fetchToken() error {
 		return fmt.Errorf("read body failed: %v", err)
 	}
 
-	snlm0ePatterns := []string{
-		`"SNlM0e":"([^"]+)"`,
-		`SNlM0e\\x22:\\x22([^\\]+)\\x22`,
-		`WIZ_global_data[^}]*"SNlM0e":"([^"]+)"`,
-		`SNlM0e\\":\\"([^\\]+)\\"`,
-		`"SNlM0e"\s*:\s*"([^"]+)"`,
-	}
+	state := extractPageState(body)
+	updateTokenInfoFromState(state)
 
-	blPatterns := []string{
-		`"cfb2h":"([^"]+)"`,
-		`cfb2h\\x22:\\x22([^\\]+)\\x22`,
-		`"cfb2h"\s*:\s*"([^"]+)"`,
-		`cfb2h\\":\\"([^\\]+)\\"`,
-	}
-
-	var snlm0e, blToken string
-	for _, pattern := range snlm0ePatterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindSubmatch(body)
-		if len(matches) > 1 {
-			token := string(matches[1])
-			if len(token) > 10 {
-				snlm0e = token
-				break
-			}
-		}
-	}
-
-	for _, pattern := range blPatterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindSubmatch(body)
-		if len(matches) > 1 {
-			blToken = string(matches[1])
-			break
-		}
-	}
-
-	if snlm0e != "" {
-		tokenInfo.mutex.Lock()
-		tokenInfo.SNlM0e = snlm0e
-		if blToken != "" {
-			tokenInfo.BLToken = blToken
-		}
-		tokenInfo.FetchedAt = time.Now()
-		tokenInfo.mutex.Unlock()
-		logger.Info("令牌获取成功: SNlM0e (长度=%d), BL=%s", len(snlm0e), blToken)
+	if state.RequestToken != "" {
+		logger.Info("页面态获取成功: token长度=%d, BL=%s, f.sid=%s", len(state.RequestToken), state.BLToken, state.FSID)
 		return nil
 	}
 
@@ -217,7 +173,7 @@ func fetchToken() error {
 		return nil
 	}
 
-	return fmt.Errorf("SNlM0e token not found in page")
+	return fmt.Errorf("request token not found in page")
 }
 
 func getToken() string {
@@ -232,7 +188,7 @@ func getToken() string {
 
 func refreshTokenIfNeeded() {
 	tokenInfo.mutex.RLock()
-	needRefresh := tokenInfo.SNlM0e == "" || time.Since(tokenInfo.FetchedAt) > 30*time.Minute
+	needRefresh := tokenInfo.SNlM0e == "" || tokenInfo.BLToken == "" || tokenInfo.FSID == "" || time.Since(tokenInfo.FetchedAt) > 30*time.Minute
 	tokenInfo.mutex.RUnlock()
 
 	cfg := getConfigSnapshot()
@@ -257,4 +213,99 @@ func startTokenRefresher() {
 			refreshTokenIfNeeded()
 		}
 	}()
+}
+
+func extractPageState(body []byte) pageState {
+	return pageState{
+		RequestToken: firstMatch(body, []string{
+			`"SNlM0e":"([^"]+)"`,
+			`SNlM0e\\x22:\\x22([^\\]+)\\x22`,
+			`WIZ_global_data[^}]*"SNlM0e":"([^"]+)"`,
+			`SNlM0e\\":\\"([^\\]+)\\"`,
+			`"SNlM0e"\s*:\s*"([^"]+)"`,
+		}),
+		BLToken: firstMatch(body, []string{
+			`"cfb2h":"([^"]+)"`,
+			`cfb2h\\x22:\\x22([^\\]+)\\x22`,
+			`"cfb2h"\s*:\s*"([^"]+)"`,
+			`cfb2h\\":\\"([^\\]+)\\"`,
+		}),
+		FSID: firstMatch(body, []string{
+			`[?&]f\.sid=([-0-9]+)`,
+			`"f\.sid"\s*:\s*"?(?:\\u003d)?([-0-9]+)"?`,
+			`"f\.sid":"([-0-9]+)"`,
+			`f\.sid\\":\\"([-0-9]+)\\"`,
+			`"FdrFJe":"([-0-9]+)"`,
+			`FdrFJe\\x22:\\x22([-0-9]+)\\x22`,
+		}),
+	}
+}
+
+func firstMatch(body []byte, patterns []string) string {
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindSubmatch(body)
+		if len(matches) > 1 {
+			value := string(matches[1])
+			if strings.TrimSpace(value) != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func updateTokenInfoFromState(state pageState) {
+	if state.RequestToken == "" && state.BLToken == "" && state.FSID == "" {
+		return
+	}
+
+	tokenInfo.mutex.Lock()
+	defer tokenInfo.mutex.Unlock()
+
+	if state.RequestToken != "" {
+		tokenInfo.SNlM0e = state.RequestToken
+	}
+	if state.BLToken != "" {
+		tokenInfo.BLToken = state.BLToken
+	}
+	if state.FSID != "" {
+		tokenInfo.FSID = state.FSID
+	}
+	if tokenInfo.ReqID == 0 {
+		tokenInfo.ReqID = seedReqID()
+	}
+	tokenInfo.FetchedAt = time.Now()
+}
+
+func getBLToken() string {
+	tokenInfo.mutex.RLock()
+	defer tokenInfo.mutex.RUnlock()
+	return tokenInfo.BLToken
+}
+
+func getFSID() string {
+	tokenInfo.mutex.RLock()
+	defer tokenInfo.mutex.RUnlock()
+	return tokenInfo.FSID
+}
+
+func nextReqID() string {
+	tokenInfo.mutex.Lock()
+	defer tokenInfo.mutex.Unlock()
+
+	if tokenInfo.ReqID == 0 {
+		tokenInfo.ReqID = seedReqID()
+	}
+	current := tokenInfo.ReqID
+	tokenInfo.ReqID += 100000
+	return strconv.FormatInt(current, 10)
+}
+
+func seedReqID() int64 {
+	base := time.Now().UnixNano()%9000000 + 1000000
+	if base%2 == 0 {
+		base++
+	}
+	return base
 }
