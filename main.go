@@ -27,6 +27,7 @@ func main() {
 	println("------------------------------------------------------")
 	println("使用说明:")
 	println("- API端口: " + fmt.Sprintf("%d", getConfigSnapshot().Port))
+	println("- API地址: http://localhost:" + fmt.Sprintf("%d", getConfigSnapshot().Port))
 	println("- 核心接口: /v1/chat/completions")
 	println("- 监控面板: / (Dashboard)")
 	println("- 遥测接口: /api/telemetry (JSON)")

@@ -3,351 +3,193 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Gemini Web 2 API</title>
+    <title>Gemini Web 2 API 控制台</title>
     <style>
-      @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap");
-
-      *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-
-      :root {
-        --bg:#080c14;--bg2:#0d1220;--bg3:#111827;
-        --glass:rgba(255,255,255,0.045);--glass2:rgba(255,255,255,0.07);
-        --stroke:rgba(255,255,255,0.08);--stroke2:rgba(255,255,255,0.13);
-        --t0:rgba(255,255,255,0.94);--t1:rgba(255,255,255,0.72);--t2:rgba(255,255,255,0.50);
-        --accent:#61d7ff;--accent2:#8effc1;--accent3:#b794f4;
-        --warn:#ffd08a;--danger:#ff7a7a;
-        --r1:20px;--r2:14px;
-        --shadow:0 24px 80px rgba(0,0,0,.45);
-        --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-        --sans:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Arial,sans-serif;
-      }
-
-      html{scroll-behavior:smooth}
-
-      body{
-        font-family:var(--sans);color:var(--t0);min-height:100vh;
-        background:var(--bg);
-        overflow-x:hidden;
-      }
-
-      /* bg art */
-      body::before{
-        content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
-        background:
-          radial-gradient(900px 600px at 10% 10%, rgba(97,215,255,.12), transparent 60%),
-          radial-gradient(800px 500px at 90% 20%, rgba(142,255,193,.08), transparent 55%),
-          radial-gradient(700px 500px at 50% 90%, rgba(183,148,244,.07), transparent 55%);
-      }
-
-      /* scrollbar */
-      ::-webkit-scrollbar{width:6px;height:6px}
-      ::-webkit-scrollbar-track{background:transparent}
-      ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:99px}
-
-      /* ── header ── */
-      .top{
-        position:sticky;top:0;z-index:30;
-        backdrop-filter:blur(16px) saturate(1.4);
-        background:rgba(8,12,20,.72);
-        border-bottom:1px solid var(--stroke);
-      }
-      .top-inner{
-        max-width:1240px;margin:0 auto;padding:0 24px;
-        height:56px;display:flex;align-items:center;justify-content:space-between;gap:12px;
-      }
-      .brand{display:flex;align-items:center;gap:12px}
-      .logo{
-        width:32px;height:32px;border-radius:10px;
-        background:linear-gradient(135deg,rgba(97,215,255,.85),rgba(142,255,193,.7));
-        border:1px solid rgba(255,255,255,.15);
-        box-shadow:0 0 20px rgba(97,215,255,.25);
-      }
-      .brand b{font-size:14px;font-weight:700;letter-spacing:.3px}
-      .nav-r{display:flex;align-items:center;gap:10px}
-      .btn{
-        display:inline-flex;align-items:center;gap:8px;
-        height:34px;padding:0 14px;border-radius:10px;
-        border:1px solid var(--stroke2);background:var(--glass);
-        color:var(--t1);font:500 13px var(--sans);text-decoration:none;
-        cursor:pointer;transition:.15s ease;user-select:none;
-      }
-      .btn:hover{border-color:rgba(255,255,255,.22);background:var(--glass2);color:var(--t0);transform:translateY(-1px)}
-      .btn.primary{border-color:rgba(97,215,255,.3);background:rgba(97,215,255,.1);color:var(--accent)}
-      .btn.primary:hover{background:rgba(97,215,255,.18)}
-      .chip{
-        display:inline-flex;align-items:center;gap:6px;
-        height:28px;padding:0 12px;border-radius:99px;
-        border:1px solid var(--stroke);background:var(--glass);
-        font:500 12px var(--sans);color:var(--t2);
-      }
-      .chip .dot{width:7px;height:7px;border-radius:50%}
-      .chip.ok{border-color:rgba(142,255,193,.25);color:rgba(142,255,193,.9)}
-      .chip.ok .dot{background:var(--accent2);box-shadow:0 0 6px rgba(142,255,193,.6)}
-      .chip.err{border-color:rgba(255,122,122,.25);color:rgba(255,122,122,.9)}
-      .chip.err .dot{background:var(--danger);box-shadow:0 0 6px rgba(255,122,122,.6)}
-
-      /* ── main ── */
-      .main{position:relative;z-index:1;max-width:1240px;margin:0 auto;padding:32px 24px 48px}
-
-      /* hero */
-      .hero{margin-bottom:28px}
-      .hero h1{font-size:30px;font-weight:800;letter-spacing:-.4px;line-height:1.2}
-      .hero p{margin-top:6px;color:var(--t2);font-size:14px}
-
-      /* sparkline area */
-      .spark-area{
-        margin-bottom:20px;border-radius:var(--r1);
-        border:1px solid var(--stroke);background:var(--glass);
-        padding:16px 18px;
-        overflow:hidden;position:relative;
-      }
-      .spark-area::after{
-        content:"";position:absolute;inset:0;pointer-events:none;
-        background:linear-gradient(180deg,transparent 60%,rgba(8,12,20,.7));
-      }
-      .spark-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;position:relative;z-index:1}
-      .spark-head span{font:600 12px var(--sans);color:var(--t2);letter-spacing:.5px;text-transform:uppercase}
-      .spark-val{font:700 13px var(--mono);color:var(--accent)}
-      svg.spark{display:block;width:100%;height:48px;position:relative;z-index:1}
-      svg.spark .line{fill:none;stroke:var(--accent);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-      svg.spark .area{fill:url(#sparkGrad)}
-
-      /* grid */
-      .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:20px}
-
-      /* card */
-      .card{
-        border-radius:var(--r1);border:1px solid var(--stroke);
-        background:var(--glass);padding:18px;
-        transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;
-        position:relative;overflow:hidden;
-      }
-      .card::before{
-        content:"";position:absolute;top:-40%;right:-30%;width:60%;height:80%;
-        border-radius:50%;pointer-events:none;
-        background:radial-gradient(circle,rgba(97,215,255,.06),transparent 70%);
-      }
-      .card:hover{transform:translateY(-2px);border-color:var(--stroke2);box-shadow:0 12px 40px rgba(0,0,0,.3)}
-      .card .label{font:500 12px var(--sans);color:var(--t2);margin-bottom:8px;display:flex;align-items:center;gap:6px;letter-spacing:.3px}
-      .card .label svg{width:15px;height:15px;fill:var(--t2)}
-      .card .val{font:800 28px var(--mono);letter-spacing:-.5px;line-height:1;transition:color .3s}
-      .card .sub{font:500 11px var(--sans);color:var(--t2);margin-top:6px}
-      .card.c-accent::before{background:radial-gradient(circle,rgba(97,215,255,.08),transparent 70%)}
-      .card.c-green::before{background:radial-gradient(circle,rgba(142,255,193,.07),transparent 70%)}
-      .card.c-red::before{background:radial-gradient(circle,rgba(255,122,122,.06),transparent 70%)}
-      .card.c-purple::before{background:radial-gradient(circle,rgba(183,148,244,.06),transparent 70%)}
-      .card.c-accent .val{color:var(--accent)}
-      .card.c-green .val{color:var(--accent2)}
-      .card.c-red .val{color:var(--danger)}
-      .card.c-purple .val{color:var(--accent3)}
-
-      /* bar for success rate */
-      .bar-track{width:100%;height:6px;border-radius:99px;background:rgba(255,255,255,.06);margin-top:10px;overflow:hidden}
-      .bar-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .8s cubic-bezier(.22,1,.36,1)}
-
-      /* note area */
-      .note-card{
-        border-radius:var(--r1);border:1px solid var(--stroke);
-        background:var(--glass);padding:20px;
-      }
-      .note-card .note-title{font:600 13px var(--sans);color:var(--t2);margin-bottom:10px;display:flex;align-items:center;gap:8px;letter-spacing:.3px}
-      .note-card .note-title svg{width:16px;height:16px;fill:var(--t2)}
-      .note-card p{font:400 13px/1.7 var(--mono);color:var(--t1);white-space:pre-wrap;margin:0}
-
-      /* footer */
-      footer{text-align:center;padding:24px;font:400 12px var(--sans);color:var(--t2);position:relative;z-index:1}
-
-      /* entrance animation */
-      .anim{opacity:0;transform:translateY(16px);transition:opacity .5s ease,transform .5s ease}
-      .anim.show{opacity:1;transform:translateY(0)}
-      .anim:nth-child(2){transition-delay:.04s}
-      .anim:nth-child(3){transition-delay:.08s}
-      .anim:nth-child(4){transition-delay:.12s}
-      .anim:nth-child(5){transition-delay:.16s}
-      .anim:nth-child(6){transition-delay:.2s}
-      .anim:nth-child(7){transition-delay:.24s}
-      .anim:nth-child(8){transition-delay:.28s}
-
-      @media(max-width:640px){
-        .hero h1{font-size:22px}
-        .grid{grid-template-columns:1fr 1fr}
-        .card .val{font-size:22px}
-        .top-inner{padding:0 14px}
-        .main{padding:20px 14px 36px}
-      }
-      @media(max-width:400px){.grid{grid-template-columns:1fr}}
+      @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Manrope:wght@500;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap");
+      *,*::before,*::after{box-sizing:border-box}html{scroll-behavior:smooth}
+      :root{color-scheme:light;--bg:#eff4fb;--bg2:#fff;--panel:rgba(255,255,255,.82);--panel2:rgba(255,255,255,.95);--text:#152033;--soft:#56647f;--faint:#8490a6;--line:rgba(21,32,51,.1);--line2:rgba(21,32,51,.18);--accent:#2563eb;--accent2:#14b8a6;--ok:#0f9f76;--danger:#dc2626;--amber:#c2410c;--shadow:0 24px 70px rgba(15,23,42,.12);--r1:30px;--r2:22px;--r3:16px;--sans:"Noto Sans SC","Microsoft YaHei",sans-serif;--display:"Manrope",var(--sans);--mono:"JetBrains Mono",Consolas,monospace;--chart-fill:rgba(37,99,235,.12)}
+      [data-theme="dark"]{color-scheme:dark;--bg:#07101d;--bg2:#0e1728;--panel:rgba(8,16,30,.78);--panel2:rgba(11,20,36,.94);--text:#f1f5ff;--soft:rgba(241,245,255,.74);--faint:rgba(241,245,255,.46);--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--accent:#60a5fa;--accent2:#2dd4bf;--ok:#34d399;--danger:#f87171;--amber:#fbbf24;--shadow:0 32px 90px rgba(0,0,0,.34);--chart-fill:rgba(96,165,250,.16)}
+      body{margin:0;min-height:100vh;font-family:var(--sans);color:var(--text);background:radial-gradient(circle at 12% 10%,rgba(37,99,235,.16),transparent 30%),radial-gradient(circle at 88% 18%,rgba(20,184,166,.12),transparent 26%),linear-gradient(180deg,var(--bg),var(--bg2));overflow-x:hidden}
+      body[data-ready="false"]{visibility:hidden}
+      body::before{content:"";position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(rgba(132,144,166,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(132,144,166,.08) 1px,transparent 1px);background-size:36px 36px;mask-image:linear-gradient(180deg,rgba(0,0,0,.6),transparent 82%)}
+      a{color:inherit}button,a{-webkit-tap-highlight-color:transparent}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+      .top{position:sticky;top:0;z-index:30;backdrop-filter:blur(18px);background:color-mix(in srgb,var(--panel2) 84%,transparent);border-bottom:1px solid var(--line)}
+      .top-in,.main,footer{width:min(1400px,calc(100% - 32px));margin:0 auto}
+      .top-in{min-height:72px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+      .brand{display:flex;align-items:center;gap:14px}.logo{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 16px 36px rgba(37,99,235,.28);position:relative}.logo::after{content:"";position:absolute;inset:9px;border-radius:10px;border:1px solid rgba(255,255,255,.34)}
+      .brand strong{display:block;font:800 1rem/1 var(--display);letter-spacing:.02em}.brand span{display:block;margin-top:4px;color:var(--soft);font-size:.9rem}
+      .actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+      .btn,.chip{min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--line2);background:color-mix(in srgb,var(--panel) 88%,transparent);display:inline-flex;align-items:center;gap:10px;font:600 .94rem/1 var(--sans);text-decoration:none}
+      .btn{cursor:pointer;color:var(--text);transition:transform .16s,border-color .16s}.btn:hover{transform:translateY(-1px);border-color:color-mix(in srgb,var(--accent) 45%,var(--line2))}
+      .chip{color:var(--soft)}.dot{width:9px;height:9px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 6px color-mix(in srgb,var(--amber) 18%,transparent)}.chip.ok .dot{background:var(--ok);box-shadow:0 0 0 6px color-mix(in srgb,var(--ok) 18%,transparent)}.chip.err .dot{background:var(--danger);box-shadow:0 0 0 6px color-mix(in srgb,var(--danger) 18%,transparent)}
+      .main{position:relative;z-index:1;padding:28px 0 52px}
+      .hero{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr);gap:18px;margin-bottom:18px}
+      .panel{background:color-mix(in srgb,var(--panel) 94%,transparent);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:var(--r1)}
+      .hero-main,.hero-side,.kpi,.spark,.table,.notes,.health{padding:24px}
+      .hero-main{position:relative;overflow:hidden;background-image:linear-gradient(135deg,color-mix(in srgb,var(--accent) 16%,transparent),color-mix(in srgb,var(--accent2) 12%,transparent))}
+      .hero-main::after{content:"";position:absolute;right:-70px;top:-40px;width:260px;height:260px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.24),transparent 68%)}
+      .eyebrow,.tag{display:inline-flex;align-items:center;min-height:34px;padding:0 12px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.08);color:var(--soft);font-size:.86rem}
+      .hero h1{margin:18px 0 10px;font:800 clamp(2.1rem,4vw,4rem)/1 var(--display);letter-spacing:-.05em;max-width:11ch}
+      .hero p{margin:0;color:var(--soft);font-size:1rem;line-height:1.78;max-width:60ch}
+      .hero-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:22px}
+      .hero-stat,.side-box,.metric,.endpoint,.note-box{border-radius:20px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel2) 95%,transparent)}
+      .hero-stat,.side-box,.metric,.endpoint,.note-box{padding:18px}
+      .hero-stat strong,.side-box strong,.metric .label,.table h2,.notes h2,.health h2{display:block}
+      .hero-stat strong{font-size:.86rem;color:var(--soft)}.hero-stat span{display:block;margin-top:8px;font:700 1.2rem/1.2 var(--display)}
+      .hero-side{display:grid;gap:14px}
+      .subgrid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:18px}
+      .kpi{grid-column:span 8}.spark{grid-column:span 4}.table{grid-column:span 4}.health{grid-column:span 3}.notes{grid-column:span 5}
+      .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+      .metric{min-height:154px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+      .metric::after{content:"";position:absolute;right:-18px;bottom:-18px;width:96px;height:96px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 16%,transparent),transparent 68%)}
+      .label{font-size:.84rem;color:var(--soft);letter-spacing:.04em;text-transform:uppercase}
+      .value{font:800 clamp(1.9rem,3vw,3rem)/1 var(--mono);letter-spacing:-.04em}
+      .sub{font-size:.9rem;color:var(--faint)}
+      .metric.ok .value{color:var(--ok)}.metric.fail .value{color:var(--danger)}.metric.accent .value{color:var(--accent)}.metric.teal .value{color:var(--accent2)}
+      .spark h2,.table h2,.notes h2,.health h2{margin:0 0 14px;font:800 1.08rem/1.2 var(--display)}
+      .spark-top,.table-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+      .spark-top span,.table-top span{color:var(--soft);font-size:.92rem}
+      .spark-frame{height:230px;border-radius:24px;border:1px solid var(--line);background:linear-gradient(180deg,color-mix(in srgb,var(--panel2) 94%,transparent),transparent);padding:16px;position:relative;overflow:hidden}
+      .spark-grid{position:absolute;inset:16px;background-image:linear-gradient(rgba(132,144,166,.12) 1px,transparent 1px),linear-gradient(90deg,rgba(132,144,166,.08) 1px,transparent 1px);background-size:100% 25%,16.666% 100%;border-radius:18px}
+      svg{position:relative;z-index:1;width:100%;height:100%}.spark-fill{fill:var(--chart-fill)}.spark-line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+      .ring{width:188px;height:188px;margin:8px auto 20px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--ok) calc(var(--pct)*1%),color-mix(in srgb,var(--danger) 76%,transparent) 0);position:relative}
+      .ring::after{content:"";position:absolute;inset:18px;border-radius:50%;background:color-mix(in srgb,var(--panel2) 96%,transparent);border:1px solid var(--line)}
+      .ring-inner{position:relative;z-index:1;text-align:center}.ring-inner strong{display:block;font:800 2rem/1 var(--display)}.ring-inner span{display:block;margin-top:8px;color:var(--soft);font-size:.92rem}
+      .endpoint-list,.status-list,.notes-list{display:grid;gap:12px}
+      .endpoint strong,.note-box strong{font-size:.94rem}.endpoint span,.status-list li,.notes-list li,.note-box span{display:block;color:var(--soft);font-size:.94rem;line-height:1.7}
+      .status-list,.notes-list{margin:0;padding:0;list-style:none}
+      .status-list li,.notes-list li{padding:14px 16px;border-radius:18px;border:1px solid var(--line);background:color-mix(in srgb,var(--panel2) 95%,transparent)}
+      footer{padding:0 0 34px;color:var(--faint);font-size:.92rem}
+      .reveal{opacity:0;transform:translateY(18px);transition:opacity .42s,transform .42s}.reveal.visible{opacity:1;transform:translateY(0)}
+      @media(max-width:1180px){.hero{grid-template-columns:1fr}.subgrid{grid-template-columns:1fr}.kpi,.spark,.table,.health,.notes{grid-column:auto}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      @media(max-width:760px){.top-in{padding:10px 0;align-items:flex-start;flex-direction:column}.top-in,.main,footer{width:min(1400px,calc(100% - 20px))}.hero-main,.hero-side,.kpi,.spark,.table,.notes,.health{padding:18px}.hero-stats,.metrics{grid-template-columns:1fr}.ring{width:160px;height:160px}}
     </style>
   </head>
-  <body>
+  <body data-theme="light" data-ready="false">
     <header class="top">
-      <div class="top-inner">
+      <div class="top-in">
         <div class="brand">
-          <div class="logo"></div>
-          <b>Dashboard</b>
+          <div class="logo" aria-hidden="true"></div>
+          <div>
+            <strong>Gemini Web 2 API</strong>
+            <span>数据展示大屏 · 实时运行控制台</span>
+          </div>
         </div>
-        <div class="nav-r">
-          <a class="btn" href="/help">Help</a>
-          <div class="chip" id="chip"><span class="dot"></span><span id="chipTxt">Connecting...</span></div>
+        <div class="actions">
+          <button class="btn" id="langEn" type="button" aria-label="Switch to English">EN</button>
+          <button class="btn" id="langZh" type="button" aria-label="切换到中文">中文</button>
+          <button class="btn" id="themeToggle" type="button" aria-label="切换主题">切换到暗色</button>
+          <a class="btn" href="/help">查看使用手册</a>
+          <div class="chip" id="chip"><span class="dot"></span><span id="chipText">连接中</span></div>
         </div>
       </div>
     </header>
 
     <main class="main">
-      <div class="hero anim">
-        <h1>Gemini Web 2 API</h1>
-        <p>Real-time telemetry &amp; monitoring</p>
-      </div>
-
-      <!-- sparkline -->
-      <div class="spark-area anim">
-        <div class="spark-head">
-          <span>Requests / minute (live)</span>
-          <span class="spark-val" id="rpmLabel">-- rpm</span>
+      <section class="hero">
+        <div class="hero-main panel reveal">
+          <span class="eyebrow">Realtime Operations</span>
+          <h1>把请求、稳定性和吞吐集中到一个视图里</h1>
+          <p>首页重构为更偏大屏的数据控制台，重点不是“看起来像 AI 报告”，而是让部署者一眼看到服务健康度、请求趋势、成功率与 token 消耗。</p>
+          <div class="hero-stats">
+            <div class="hero-stat"><strong>当前状态</strong><span id="heroStatus">等待数据</span></div>
+            <div class="hero-stat"><strong>最后刷新</strong><span id="lastUpdated">--:--:--</span></div>
+            <div class="hero-stat"><strong>Base URL</strong><span id="baseUrl">--</span></div>
+          </div>
         </div>
-        <svg class="spark" viewBox="0 0 600 48" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="rgba(97,215,255,.3)"/>
-              <stop offset="100%" stop-color="rgba(97,215,255,0)"/>
-            </linearGradient>
-          </defs>
-          <path class="area" d="" id="sparkArea"/>
-          <path class="line" d="" id="sparkLine"/>
-        </svg>
-      </div>
+        <aside class="hero-side reveal">
+          <div class="side-box panel"><strong>运行摘要</strong><span id="summaryText">正在读取遥测数据，用于生成实时概览。</span></div>
+          <div class="side-box panel"><strong>负载等级</strong><span id="loadText">等待样本</span></div>
+          <div class="side-box panel"><strong>主要入口</strong><span><code>/api/telemetry</code> · <code>/v1/models</code> · <code>/v1/chat/completions</code></span></div>
+        </aside>
+      </section>
 
-      <!-- metric cards -->
-      <div class="grid" id="grid"></div>
-
-      <!-- note -->
-      <div class="note-card anim">
-        <div class="note-title">
-          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
-          Notes
+      <section class="subgrid">
+        <div class="kpi panel reveal">
+          <div class="table-top"><h2>核心指标</h2><span>用于值守时快速判断系统状态</span></div>
+          <div class="metrics">
+            <article class="metric accent"><div class="label">运行时长</div><div class="value" id="uptime">--</div><div class="sub">服务在线时长</div></article>
+            <article class="metric accent"><div class="label">RPM</div><div class="value" id="rpm">--</div><div class="sub">每分钟请求数</div></article>
+            <article class="metric"><div class="label">总请求数</div><div class="value" id="total">--</div><div class="sub">累计处理量</div></article>
+            <article class="metric ok"><div class="label">成功请求</div><div class="value" id="ok">--</div><div class="sub" id="successPct">成功率 --</div></article>
+            <article class="metric fail"><div class="label">失败请求</div><div class="value" id="fail">--</div><div class="sub" id="failPct">失败率 --</div></article>
+            <article class="metric teal"><div class="label">输入 Token</div><div class="value" id="inpTok">--</div><div class="sub">累计输入消耗</div></article>
+            <article class="metric teal"><div class="label">输出 Token</div><div class="value" id="outTok">--</div><div class="sub">累计输出消耗</div></article>
+            <article class="metric"><div class="label">均次 Token</div><div class="value" id="avgTok">--</div><div class="sub">总 token / 总请求</div></article>
+          </div>
         </div>
-        <p id="note">Loading...</p>
-      </div>
+
+        <div class="spark panel reveal">
+          <div class="spark-top"><h2>流量趋势</h2><span id="rpmLabel">-- rpm</span></div>
+          <div class="spark-frame">
+            <div class="spark-grid"></div>
+            <svg viewBox="0 0 640 230" preserveAspectRatio="none">
+              <path class="spark-fill" id="sparkFill" d=""></path>
+              <path class="spark-line" id="sparkLine" d=""></path>
+            </svg>
+          </div>
+        </div>
+
+        <div class="table panel reveal">
+          <div class="table-top"><h2>接口面板</h2><span>面向接入方的关键入口</span></div>
+          <div class="endpoint-list">
+            <div class="endpoint"><strong>GET /api/telemetry</strong><span>当前页和手册页都会依赖这个接口获取实时状态。</span></div>
+            <div class="endpoint"><strong>GET /v1/models</strong><span>适合 SDK 初始化、探活或对接侧做能力发现。</span></div>
+            <div class="endpoint"><strong>POST /v1/chat/completions</strong><span>OpenAI 兼容聊天入口，支持普通响应与流式返回。</span></div>
+          </div>
+        </div>
+
+        <div class="health panel reveal">
+          <h2>稳定性总览</h2>
+          <div class="ring" id="ring" style="--pct:0">
+            <div class="ring-inner"><strong id="ringValue">0%</strong><span>成功率</span></div>
+          </div>
+          <ul class="status-list">
+            <li id="stateLine">状态：等待数据</li>
+            <li id="refreshLine">刷新：每 5 秒拉取一次遥测</li>
+            <li id="sessionLine">建议：多轮会话固定使用 X-Session-ID</li>
+          </ul>
+        </div>
+
+        <div class="notes panel reveal">
+          <div class="table-top"><h2>运行备注</h2><span>来自配置中的 note 字段</span></div>
+          <div class="note-box"><strong>摘要</strong><span id="noteSummary">正在等待说明信息。</span></div>
+          <ul class="notes-list" id="notesList">
+            <li>Loading...</li>
+          </ul>
+        </div>
+      </section>
     </main>
 
-    <footer>Gemini Web 2 API &middot; by XxxXTeam</footer>
+    <footer>Gemini Web 2 API · Dashboard / Help 双视图 · 亮暗主题持久化</footer>
 
     <script>
-      // ── card definitions ──
-      const CARDS = [
-        {id:"uptime",     label:"Uptime",          cls:"c-accent",  icon:"clock",     sub:"seconds online"},
-        {id:"rpm",        label:"RPM",             cls:"c-accent",  icon:"speed",     sub:"requests / min"},
-        {id:"total",      label:"Total Requests",  cls:"",          icon:"bar",       sub:"lifetime"},
-        {id:"ok",         label:"Succeeded",       cls:"c-green",   icon:"check",     sub:""},
-        {id:"fail",       label:"Failed",          cls:"c-red",     icon:"error",     sub:""},
-        {id:"inpTok",     label:"Input Tokens",    cls:"c-purple",  icon:"down",      sub:"estimated"},
-        {id:"outTok",     label:"Output Tokens",   cls:"c-purple",  icon:"up",        sub:"estimated"},
-      ];
-      const ICONS={
-        clock:`<svg viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
-        speed:`<svg viewBox="0 0 24 24"><path d="M19.03 7.39l1.42-1.42c-4.37-3.92-11.11-3.92-15.48 0l1.42 1.42c3.59-3.21 9.06-3.21 12.64 0zm-2.83 2.83l1.42-1.42c-2.81-2.52-7.14-2.52-9.95 0l1.42 1.42c2.03-1.81 5.09-1.81 7.11 0zM12 13c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>`,
-        bar:`<svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>`,
-        check:`<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
-        error:`<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>`,
-        down:`<svg viewBox="0 0 24 24"><path d="M19 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 9h-2V7h-2v5H6l4 4 4-4z"/></svg>`,
-        up:`<svg viewBox="0 0 24 24"><path d="M19 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 9h-2v5h-2v-5H8l4-4 4 4z"/></svg>`,
+      const root=document.body,themeToggle=document.getElementById("themeToggle"),themeKey="gemini-ui-theme",langKey="gemini-ui-lang",prefersDark=window.matchMedia("(prefers-color-scheme: dark)");
+      const langButtons={en:document.getElementById("langEn"),zh:document.getElementById("langZh")};
+      let currentLang=localStorage.getItem(langKey)||"en";
+      function applyTheme(theme){root.setAttribute("data-theme",theme);themeToggle.textContent=theme==="dark"?(currentLang==="zh"?"切换到亮色":"Switch to Light"):(currentLang==="zh"?"切换到暗色":"Switch to Dark")}
+      applyTheme(localStorage.getItem(themeKey)||(prefersDark.matches?"dark":"light"));
+      const copy={
+        en:{title:"Gemini Web 2 API Dashboard",htmlLang:"en",staticTexts:[[".brand span","Data Wall · Real-time Operations Console"],[".actions a","Open Manual"],[".hero-main h1","One view for traffic, stability, and throughput"],[".hero-main p","The homepage now behaves like a monitoring wall instead of an AI-style report. Operators can scan health, trend lines, success rate, and token usage at a glance."],[".hero-stat:nth-child(1) strong","Current State"],[".hero-stat:nth-child(2) strong","Last Refresh"],[".hero-stat:nth-child(3) strong","Base URL"],[".side-box:nth-child(1) strong","Runtime Summary"],[".side-box:nth-child(1) span","Reading telemetry data to build a live overview."],[".side-box:nth-child(2) strong","Load Level"],[".side-box:nth-child(2) span","Waiting for samples"],[".side-box:nth-child(3) strong","Primary Endpoints"],[".table-top h2","Core Metrics"],[".kpi .table-top span","Designed for quick operator judgement"],[".metric:nth-child(1) .label","Uptime"],[".metric:nth-child(1) .sub","time online"],[".metric:nth-child(2) .label","RPM"],[".metric:nth-child(2) .sub","requests per minute"],[".metric:nth-child(3) .label","Total Requests"],[".metric:nth-child(3) .sub","lifetime volume"],[".metric:nth-child(4) .label","Succeeded"],[".metric:nth-child(5) .label","Failed"],[".metric:nth-child(6) .label","Input Tokens"],[".metric:nth-child(6) .sub","cumulative input"],[".metric:nth-child(7) .label","Output Tokens"],[".metric:nth-child(7) .sub","cumulative output"],[".metric:nth-child(8) .label","Avg Tokens"],[".metric:nth-child(8) .sub","total tokens / total requests"],[".spark-top h2","Traffic Trend"],[".table.panel .table-top h2","Endpoint Panel"],[".table.panel .table-top span","The most important entry points for clients"],[".endpoint:nth-child(1) span","Both the dashboard and the manual rely on this endpoint for live state."],[".endpoint:nth-child(2) span","Useful for SDK discovery, probing, or health checks."],[".endpoint:nth-child(3) span","Primary OpenAI-compatible chat endpoint with standard and streaming modes."],[".health h2","Stability Overview"],[".ring-inner span","success rate"],["#refreshLine","Refresh: telemetry is fetched every 5 seconds"],["#sessionLine","Tip: keep X-Session-ID stable for multi-turn sessions"],[".notes .table-top h2","Runtime Notes"],[".notes .table-top span","Read from the note field in config"],[".note-box strong","Summary"],["footer","Gemini Web 2 API · Dashboard / Help dual view · theme and language persistence"]],status:{connecting:"Connecting",online:"Online",offline:"Offline",running:"Running",unknown:"Unknown",summary:(total,rpm)=>`Processed ${total} requests in total, with ${rpm} rpm over the last minute.`,loadHigh:"High load. Watch proxy quality and failure rate.",loadMid:"Moderate load. Service is under steady use.",loadLow:"Low load. Good for validation or idle-time checks.",stateOnline:"State: online and responding",stateUnknown:"State: state unknown",stateError:"State: telemetry unavailable",sessionWarn:"Tip: check failed requests and proxy stability first",sessionGood:"Tip: current success rate looks stable",noteEmpty:"No notes available",success:(v)=>`Success ${v}%`,fail:(v)=>`Failure ${v}%`,refresh:(v)=>`Refresh: ${v}`}},
+        zh:{title:"Gemini Web 2 API 控制台",htmlLang:"zh-CN",staticTexts:[[".brand span","数据展示大屏 · 实时运行控制台"],[".actions a","查看使用手册"],[".hero-main h1","把请求、稳定性和吞吐集中到一个视图里"],[".hero-main p","首页重构为更偏大屏的数据控制台，重点不是“看起来像 AI 报告”，而是让部署者一眼看到服务健康度、请求趋势、成功率与 token 消耗。"],[".hero-stat:nth-child(1) strong","当前状态"],[".hero-stat:nth-child(2) strong","最后刷新"],[".hero-stat:nth-child(3) strong","Base URL"],[".side-box:nth-child(1) strong","运行摘要"],[".side-box:nth-child(1) span","正在读取遥测数据，用于生成实时概览。"],[".side-box:nth-child(2) strong","负载等级"],[".side-box:nth-child(2) span","等待样本"],[".side-box:nth-child(3) strong","主要入口"],[".table-top h2","核心指标"],[".kpi .table-top span","用于值守时快速判断系统状态"],[".metric:nth-child(1) .label","运行时长"],[".metric:nth-child(1) .sub","服务在线时长"],[".metric:nth-child(2) .label","RPM"],[".metric:nth-child(2) .sub","每分钟请求数"],[".metric:nth-child(3) .label","总请求数"],[".metric:nth-child(3) .sub","累计处理量"],[".metric:nth-child(4) .label","成功请求"],[".metric:nth-child(5) .label","失败请求"],[".metric:nth-child(6) .label","输入 Token"],[".metric:nth-child(6) .sub","累计输入消耗"],[".metric:nth-child(7) .label","输出 Token"],[".metric:nth-child(7) .sub","累计输出消耗"],[".metric:nth-child(8) .label","均次 Token"],[".metric:nth-child(8) .sub","总 token / 总请求"],[".spark-top h2","流量趋势"],[".table.panel .table-top h2","接口面板"],[".table.panel .table-top span","面向接入方的关键入口"],[".endpoint:nth-child(1) span","当前页和手册页都会依赖这个接口获取实时状态。"],[".endpoint:nth-child(2) span","适合 SDK 初始化、探活或对接侧做能力发现。"],[".endpoint:nth-child(3) span","OpenAI 兼容聊天入口，支持普通响应与流式返回。"],[".health h2","稳定性总览"],[".ring-inner span","成功率"],["#refreshLine","刷新：每 5 秒拉取一次遥测"],["#sessionLine","建议：多轮会话固定使用 X-Session-ID"],[".notes .table-top h2","运行备注"],[".notes .table-top span","来自配置中的 note 字段"],[".note-box strong","摘要"],["footer","Gemini Web 2 API · Dashboard / Help 双视图 · 亮暗主题与语言持久化"]],status:{connecting:"连接中",online:"服务在线",offline:"连接失败",running:"运行中",unknown:"未知",summary:(total,rpm)=>`当前已累计处理 ${total} 个请求，最近一分钟负载为 ${rpm} rpm。`,loadHigh:"高负载，建议关注代理与失败率",loadMid:"中等负载，处于持续服务状态",loadLow:"低负载，适合联调或空闲期巡检",stateOnline:"状态：在线且可响应",stateUnknown:"状态：未知",stateError:"状态：无法读取遥测",sessionWarn:"建议：优先查看失败请求与代理稳定性",sessionGood:"建议：当前成功率表现稳定",noteEmpty:"暂无备注信息",success:(v)=>`成功率 ${v}%`,fail:(v)=>`失败率 ${v}%`,refresh:(v)=>`刷新：${v}`}}
       };
+      function setText(selector,value){const el=document.querySelector(selector);if(el) el.textContent=value}
+      function renderLanguage(lang){currentLang=lang;const pack=copy[lang];document.title=pack.title;document.documentElement.lang=pack.htmlLang;pack.staticTexts.forEach(([selector,value])=>setText(selector,value));langButtons.en.style.borderColor=lang==="en"?"color-mix(in srgb,var(--accent) 45%,var(--line2))":"";langButtons.zh.style.borderColor=lang==="zh"?"color-mix(in srgb,var(--accent) 45%,var(--line2))":"";applyTheme(root.getAttribute("data-theme")||"light")}
+      renderLanguage(currentLang);
+      themeToggle.addEventListener("click",()=>{const next=root.getAttribute("data-theme")==="dark"?"light":"dark";localStorage.setItem(themeKey,next);applyTheme(next)});
+      langButtons.en.addEventListener("click",()=>{localStorage.setItem(langKey,"en");renderLanguage("en");fetchAll()});
+      langButtons.zh.addEventListener("click",()=>{localStorage.setItem(langKey,"zh");renderLanguage("zh");fetchAll()});
 
-      // build cards
-      const grid=document.getElementById("grid");
-      CARDS.forEach((c,i)=>{
-        const d=document.createElement("div");
-        d.className="card "+c.cls+" anim";
-        d.style.transitionDelay=(i*.05)+"s";
-        d.innerHTML=`<div class="label">${ICONS[c.icon]||""}${c.label}</div><div class="val" id="${c.id}">--</div>${c.sub?`<div class="sub">${c.sub}</div>`:""}`;
-        if(c.id==="ok"||c.id==="fail"){
-          d.innerHTML+=`<div class="bar-track"><div class="bar-fill" id="${c.id}Bar" style="width:0"></div></div>`;
-        }
-        grid.appendChild(d);
-      });
-
-      // sparkline state
-      const sparkPts=[];
-      const MAX_SPARK=60;
-
-      function updateSpark(rpm){
-        sparkPts.push(rpm);
-        if(sparkPts.length>MAX_SPARK) sparkPts.shift();
-        const w=600,h=48,max=Math.max(...sparkPts,1)*1.15;
-        const step=w/Math.max(MAX_SPARK-1,1);
-        let line="",area="",first=true;
-        sparkPts.forEach((v,i)=>{
-          const x=i*step, y=h-(v/max)*h;
-          if(first){line+=`M${x},${y}`;area+=`M${x},${h}L${x},${y}`;first=false}
-          else{line+=` L${x},${y}`;area+=` L${x},${y}`}
-        });
-        if(sparkPts.length){area+=` L${(sparkPts.length-1)*step},${h}Z`}
-        document.getElementById("sparkLine").setAttribute("d",line);
-        document.getElementById("sparkArea").setAttribute("d",area);
-      }
-
-      // animated number
-      const animMap={};
-      function setVal(id,target,fmt){
-        const el=document.getElementById(id);if(!el) return;
-        const prev=animMap[id]||0;
-        if(target===prev){el.textContent=fmt?fmt(target):target.toLocaleString();return}
-        animMap[id]=target;
-        const dur=600,start=performance.now();
-        function tick(now){
-          const t=Math.min((now-start)/dur,1);
-          const ease=1-Math.pow(1-t,3);
-          const cur=Math.round(prev+(target-prev)*ease);
-          el.textContent=fmt?fmt(cur):cur.toLocaleString();
-          if(t<1) requestAnimationFrame(tick);
-        }
-        requestAnimationFrame(tick);
-      }
-
-      function fmtUptime(s){
-        if(isNaN(s)||s<0) return "--";
-        const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),sec=Math.floor(s%60);
-        return (d?d+"d ":"")+(h||d?h+"h ":"")+(m||h||d?m+"m ":"")+sec+"s";
-      }
-
-      function setStatus(ok){
-        const chip=document.getElementById("chip"),txt=document.getElementById("chipTxt");
-        chip.classList.toggle("ok",ok);chip.classList.toggle("err",!ok);
-        txt.textContent=ok?"Online":"Offline";
-      }
-
-      async function fetchAll(){
-        try{
-          const r=await fetch("/api/telemetry");if(!r.ok) throw 0;
-          const d=await r.json();
-          setStatus(true);
-          setVal("uptime",d.uptime_seconds,fmtUptime);
-          const rpm=+(d.rpm||0).toFixed(1);
-          setVal("rpm",rpm,v=>v.toFixed(1));
-          document.getElementById("rpmLabel").textContent=rpm+" rpm";
-          updateSpark(rpm);
-          setVal("total",d.total_requests);
-          setVal("ok",d.success_requests);
-          setVal("fail",d.failed_requests);
-          setVal("inpTok",d.input_tokens);
-          setVal("outTok",d.output_tokens);
-          // success bar
-          const total=d.total_requests||0,ok=d.success_requests||0;
-          const pct=total>0?Math.round(ok/total*100):0;
-          const ob=document.getElementById("okBar"),fb=document.getElementById("failBar");
-          if(ob) ob.style.width=pct+"%";
-          if(fb) fb.style.width=(100-pct)+"%";
-          // note
-          document.getElementById("note").textContent=(d.note&&d.note.length)?d.note.join("\n"):"No notes.";
-        }catch(e){setStatus(false)}
-      }
-
-      // entrance
-      requestAnimationFrame(()=>{
-        document.querySelectorAll(".anim").forEach(el=>el.classList.add("show"));
-      });
-
-      fetchAll();
-      setInterval(fetchAll,5000);
+      const fmt=new Intl.NumberFormat("en-US"),sparkData=[],MAX_SPARK=36,animState={};
+      document.getElementById("baseUrl").textContent=location.origin;
+      function animateValue(id,target,formatter){const el=document.getElementById(id);if(!el) return;const prev=animState[id]??0;if(target===prev){el.textContent=formatter(target);return}animState[id]=target;const start=performance.now(),duration=520;const tick=(now)=>{const t=Math.min((now-start)/duration,1),ease=1-Math.pow(1-t,3),value=prev+(target-prev)*ease;el.textContent=formatter(value);if(t<1) requestAnimationFrame(tick)};requestAnimationFrame(tick)}
+      const fmtInt=(v)=>fmt.format(Math.round(v)),fmtOne=(v)=>Number(v).toFixed(1),fmtUptime=(s)=>{s=Math.max(0,Math.round(s));const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),sec=s%60;return`${d?d+"d ":""}${h||d?h+"h ":""}${m||h||d?m+"m ":""}${sec}s`};
+      function updateSpark(value){sparkData.push(Number(value)||0);if(sparkData.length>MAX_SPARK) sparkData.shift();const w=640,h=230,max=Math.max(...sparkData,1)*1.15,step=w/Math.max(MAX_SPARK-1,1);let line="",fill="";sparkData.forEach((v,i)=>{const x=i*step,y=h-(v/max)*(h-20)-10;if(i===0){line=`M${x},${y}`;fill=`M${x},${h}L${x},${y}`}else{line+=` L${x},${y}`;fill+=` L${x},${y}`}});if(sparkData.length) fill+=` L${(sparkData.length-1)*step},${h}Z`;document.getElementById("sparkLine").setAttribute("d",line);document.getElementById("sparkFill").setAttribute("d",fill)}
+      function setChip(ok){const chip=document.getElementById("chip"),txt=document.getElementById("chipText"),pack=copy[currentLang].status;chip.classList.toggle("ok",ok);chip.classList.toggle("err",!ok);txt.textContent=ok?pack.online:pack.offline}
+      function updateNotes(list){const pack=copy[currentLang].status,notes=Array.isArray(list)&&list.length?list:[pack.noteEmpty];document.getElementById("noteSummary").textContent=notes[0];document.getElementById("notesList").innerHTML=notes.map(item=>`<li>${item}</li>`).join("")}
+      async function fetchAll(){const pack=copy[currentLang].status;try{const resp=await fetch("/api/telemetry");if(!resp.ok) throw new Error("bad status");const data=await resp.json();setChip(true);const total=Number(data.total_requests||0),ok=Number(data.success_requests||0),fail=Number(data.failed_requests||0),rpm=Number(data.rpm||0),inp=Number(data.input_tokens||0),out=Number(data.output_tokens||0);const successPct=total?ok/total*100:0,failPct=total?fail/total*100:0,avgTok=total?(inp+out)/total:0;animateValue("uptime",Number(data.uptime_seconds||0),fmtUptime);animateValue("rpm",rpm,fmtOne);animateValue("total",total,fmtInt);animateValue("ok",ok,fmtInt);animateValue("fail",fail,fmtInt);animateValue("inpTok",inp,fmtInt);animateValue("outTok",out,fmtInt);animateValue("avgTok",avgTok,fmtOne);document.getElementById("rpmLabel").textContent=`${fmtOne(rpm)} rpm`;document.getElementById("successPct").textContent=pack.success(fmtOne(successPct));document.getElementById("failPct").textContent=pack.fail(fmtOne(failPct));document.getElementById("ring").style.setProperty("--pct",successPct.toFixed(1));document.getElementById("ringValue").textContent=`${fmtOne(successPct)}%`;document.getElementById("heroStatus").textContent=data.status==="running"?pack.running:pack.unknown;const now=new Date();document.getElementById("lastUpdated").textContent=now.toLocaleTimeString(currentLang==="zh"?"zh-CN":"en-US",{hour12:false});document.getElementById("summaryText").textContent=pack.summary(fmt.format(total),fmtOne(rpm));document.getElementById("loadText").textContent=rpm>=120?pack.loadHigh:rpm>=30?pack.loadMid:pack.loadLow;document.getElementById("stateLine").textContent=data.status==="running"?pack.stateOnline:pack.stateUnknown;document.getElementById("refreshLine").textContent=pack.refresh(now.toLocaleString(currentLang==="zh"?"zh-CN":"en-US",{hour12:false}));document.getElementById("sessionLine").textContent=successPct<95?pack.sessionWarn:pack.sessionGood;updateNotes(data.note);updateSpark(rpm)}catch(_){setChip(false);document.getElementById("heroStatus").textContent=pack.offline;document.getElementById("summaryText").textContent=currentLang==="zh"?"遥测读取失败，请检查服务进程、网络或代理配置。":"Failed to read telemetry. Check the process, network, or proxy settings.";document.getElementById("loadText").textContent=currentLang==="zh"?"无法评估负载，请先恢复 telemetry 接口。":"Unable to estimate load until telemetry recovers.";document.getElementById("stateLine").textContent=pack.stateError}}
+      requestAnimationFrame(()=>document.querySelectorAll(".reveal").forEach((el)=>el.classList.add("visible")));
+      fetchAll();setInterval(fetchAll,5000);root.dataset.ready="true";
     </script>
   </body>
 </html>
