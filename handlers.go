@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -98,7 +99,33 @@ func handleHelpUI(w http.ResponseWriter, r *http.Request) {
 	w.Write(helpHTML)
 }
 
-var sessions = make(map[string]*GeminiSession)
+var (
+	sessions   = make(map[string]*GeminiSession)
+	sessionsMu sync.RWMutex
+)
+
+func getOrCreateSession(sessionKey, conversationID string) (*GeminiSession, bool) {
+	sessionsMu.RLock()
+	session, exists := sessions[sessionKey]
+	sessionsMu.RUnlock()
+	if exists {
+		return session, false
+	}
+
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+
+	if session, exists = sessions[sessionKey]; exists {
+		return session, false
+	}
+
+	session = &GeminiSession{}
+	if conversationID != "" {
+		session.SetConversationID(conversationID)
+	}
+	sessions[sessionKey] = session
+	return session, true
+}
 
 func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -140,22 +167,23 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		sessionKey = req.ConversationID
 	}
 
-	session, exists := sessions[sessionKey]
-	isNewSession := !exists
+	session, isNewSession := getOrCreateSession(sessionKey, req.ConversationID)
+	sessionSnapshot := session.Snapshot()
 
-	if req.ConversationID != "" && exists {
-		logger.Debug("正在恢复对话: %s", req.ConversationID)
-	} else if req.ConversationID != "" && !exists {
-		session = &GeminiSession{ConversationID: req.ConversationID}
-		sessions[sessionKey] = session
-		logger.Debug("根据 conversation_id 创建了新会话: %s", req.ConversationID)
-		isNewSession = false
-	} else if !exists {
-		session = &GeminiSession{}
-		sessions[sessionKey] = session
+	if req.ConversationID != "" {
+		if sessionSnapshot.ConversationID != req.ConversationID {
+			session.SetConversationID(req.ConversationID)
+		}
+		if isNewSession {
+			logger.Debug("根据 conversation_id 创建了新会话: %s", req.ConversationID)
+			isNewSession = false
+		} else {
+			logger.Debug("正在恢复对话: %s", req.ConversationID)
+		}
+	} else if isNewSession {
 		logger.Debug("创建了新会话: %s", sessionKey)
 	} else {
-		logger.Debug("正在使用现有会话: %s (c=%s)", sessionKey, session.ConversationID)
+		logger.Debug("正在使用现有会话: %s (c=%s)", sessionKey, sessionSnapshot.ConversationID)
 	}
 
 	snlm0eToken, _ := tokenManager.GetTokenForSession(sessionKey, isNewSession)

@@ -10,14 +10,49 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type GeminiSession struct {
+	mu             sync.RWMutex
 	ConversationID string
 	ResponseID     string
 	ChoiceID       string
 	TokenIndex     int
+}
+
+type GeminiSessionSnapshot struct {
+	ConversationID string
+	ResponseID     string
+	ChoiceID       string
+	TokenIndex     int
+}
+
+func (s *GeminiSession) Snapshot() GeminiSessionSnapshot {
+	if s == nil {
+		return GeminiSessionSnapshot{}
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return GeminiSessionSnapshot{
+		ConversationID: s.ConversationID,
+		ResponseID:     s.ResponseID,
+		ChoiceID:       s.ChoiceID,
+		TokenIndex:     s.TokenIndex,
+	}
+}
+
+func (s *GeminiSession) SetConversationID(conversationID string) {
+	if s == nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ConversationID = conversationID
 }
 
 type ChatCompletionRequest struct {
@@ -306,9 +341,10 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	}
 
 	var contextArray []interface{}
-	if session != nil && session.ConversationID != "" {
-		contextArray = []interface{}{session.ConversationID, session.ResponseID, session.ChoiceID, nil, nil, nil, nil, nil, nil, ""}
-		logger.Debug("正在使用现有会话: c=%s, r=%s, rc=%s", session.ConversationID, session.ResponseID, session.ChoiceID)
+	sessionSnapshot := session.Snapshot()
+	if sessionSnapshot.ConversationID != "" {
+		contextArray = []interface{}{sessionSnapshot.ConversationID, sessionSnapshot.ResponseID, sessionSnapshot.ChoiceID, nil, nil, nil, nil, nil, nil, ""}
+		logger.Debug("正在使用现有会话: c=%s, r=%s, rc=%s", sessionSnapshot.ConversationID, sessionSnapshot.ResponseID, sessionSnapshot.ChoiceID)
 	} else {
 		contextArray = []interface{}{nil, nil, nil, nil, nil, nil, nil, nil, nil, ""}
 		logger.Debug("正在开始新对话")
@@ -512,7 +548,8 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 	}
 
 	updateSessionFromResponse(session, bodyStr)
-	sendStreamChunkWithConversation(w, flusher, model, "", "assistant", false, session.ConversationID)
+	sessionSnapshot := session.Snapshot()
+	sendStreamChunkWithConversation(w, flusher, model, "", "assistant", false, sessionSnapshot.ConversationID)
 
 	if content != "" {
 		logger.Debug("已提取流式内容 (长度=%d): %.100s", len(content), content)
@@ -709,12 +746,14 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		finishReason = "tool_calls"
 	}
 
+	sessionSnapshot := session.Snapshot()
+
 	response := ChatCompletionResponse{
 		ID:             fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
 		Object:         "chat.completion",
 		Created:        time.Now().Unix(),
 		Model:          model,
-		ConversationID: session.ConversationID,
+		ConversationID: sessionSnapshot.ConversationID,
 		Choices: []Choice{{
 			Index: 0,
 			Message: &Message{
@@ -739,23 +778,31 @@ func updateSessionFromResponse(session *GeminiSession, body string) {
 		return
 	}
 
+	snapshot := session.Snapshot()
 	convRe := regexp.MustCompile(`"c_([a-f0-9]+)"`)
 	if matches := convRe.FindStringSubmatch(body); len(matches) > 1 {
-		session.ConversationID = "c_" + matches[1]
+		snapshot.ConversationID = "c_" + matches[1]
 	}
 
 	respRe := regexp.MustCompile(`"r_([a-f0-9]+)"`)
 	if matches := respRe.FindStringSubmatch(body); len(matches) > 1 {
-		session.ResponseID = "r_" + matches[1]
+		snapshot.ResponseID = "r_" + matches[1]
 	}
 
 	choiceRe := regexp.MustCompile(`"rc_([a-f0-9]+)"`)
 	if matches := choiceRe.FindStringSubmatch(body); len(matches) > 1 {
-		session.ChoiceID = "rc_" + matches[1]
+		snapshot.ChoiceID = "rc_" + matches[1]
 	}
 
-	if session.ConversationID != "" {
-		logger.Debug("会话已更新: c=%s, r=%s, rc=%s", session.ConversationID, session.ResponseID, session.ChoiceID)
+	session.mu.Lock()
+	session.ConversationID = snapshot.ConversationID
+	session.ResponseID = snapshot.ResponseID
+	session.ChoiceID = snapshot.ChoiceID
+	session.TokenIndex = snapshot.TokenIndex
+	session.mu.Unlock()
+
+	if snapshot.ConversationID != "" {
+		logger.Debug("会话已更新: c=%s, r=%s, rc=%s", snapshot.ConversationID, snapshot.ResponseID, snapshot.ChoiceID)
 	}
 }
 
