@@ -26,8 +26,16 @@ cd e:/Project/AI/All2API/geminiweb2api
 
 ```bash
 go mod tidy
-go run .
+go run ./cmd/geminiweb2api
 ```
+
+Project layout now uses folders by responsibility:
+
+- `cmd/geminiweb2api`: application entrypoint
+- `internal/server`: HTTP server assembly and routing
+- `internal/gemini`: Gemini request/response logic
+- `internal/config`, `internal/logging`, `internal/httpclient`, `internal/token`, `internal/metrics`: infrastructure modules
+- `internal/web`: embedded dashboard and help pages
 
 3. Default listen address:
 

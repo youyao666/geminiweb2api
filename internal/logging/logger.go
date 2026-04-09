@@ -1,4 +1,4 @@
-package main
+package logging
 
 import (
 	"io"
@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	LogLevelDebug = "debug"
-	LogLevelInfo  = "info"
-	LogLevelWarn  = "warn"
-	LogLevelError = "error"
+	LevelDebug = "debug"
+	LevelInfo  = "info"
+	LevelWarn  = "warn"
+	LevelError = "error"
 )
 
 type Logger struct {
@@ -27,7 +27,71 @@ type Logger struct {
 	fileDebug *log.Logger
 }
 
-var logger *Logger
+func New(level string, console io.Writer, file io.Writer) *Logger {
+	flags := log.Ldate | log.Ltime | log.Lmicroseconds
+	useColor := shouldColorizeConsole()
+	l := &Logger{level: level}
+
+	l.consoleInfo = log.New(console, levelPrefix("INFO", useColor), flags)
+	l.consoleWarn = log.New(console, levelPrefix("WARN", useColor), flags)
+	l.consoleError = log.New(console, levelPrefix("ERROR", useColor), flags)
+	l.consoleDebug = log.New(console, levelPrefix("DEBUG", useColor), flags)
+
+	if file != nil {
+		l.fileInfo = log.New(file, levelPrefix("INFO", false), flags)
+		l.fileWarn = log.New(file, levelPrefix("WARN", false), flags)
+		l.fileError = log.New(file, levelPrefix("ERROR", false), flags)
+		l.fileDebug = log.New(file, levelPrefix("DEBUG", false), flags)
+	}
+
+	return l
+}
+
+func NewFromConfig(level string, logFile string) (*Logger, error) {
+	if logFile == "" {
+		return New(level, os.Stdout, nil), nil
+	}
+
+	output, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		return nil, err
+	}
+	return New(level, os.Stdout, output), nil
+}
+
+func (l *Logger) Debug(format string, v ...interface{}) {
+	if l.level == LevelDebug {
+		l.consoleDebug.Printf(format, v...)
+		if l.fileDebug != nil {
+			l.fileDebug.Printf(format, v...)
+		}
+	}
+}
+
+func (l *Logger) Info(format string, v ...interface{}) {
+	if l.level == LevelDebug || l.level == LevelInfo {
+		l.consoleInfo.Printf(format, v...)
+		if l.fileInfo != nil {
+			l.fileInfo.Printf(format, v...)
+		}
+	}
+}
+
+func (l *Logger) Warn(format string, v ...interface{}) {
+	if l.level != LevelError {
+		l.consoleWarn.Printf(format, v...)
+		if l.fileWarn != nil {
+			l.fileWarn.Printf(format, v...)
+		}
+	}
+}
+
+func (l *Logger) Error(format string, v ...interface{}) {
+	l.consoleError.Printf(format, v...)
+	if l.fileError != nil {
+		l.fileError.Printf(format, v...)
+	}
+}
 
 func shouldColorizeConsole() bool {
 	if os.Getenv("NO_COLOR") != "" {
@@ -71,73 +135,4 @@ func levelPrefix(level string, colored bool) string {
 		}
 		return "[LOG]   "
 	}
-}
-
-func newLogger(level string, console io.Writer, file io.Writer) *Logger {
-	flags := log.Ldate | log.Ltime | log.Lmicroseconds
-	useColor := shouldColorizeConsole()
-	l := &Logger{level: level}
-
-	l.consoleInfo = log.New(console, levelPrefix("INFO", useColor), flags)
-	l.consoleWarn = log.New(console, levelPrefix("WARN", useColor), flags)
-	l.consoleError = log.New(console, levelPrefix("ERROR", useColor), flags)
-	l.consoleDebug = log.New(console, levelPrefix("DEBUG", useColor), flags)
-
-	if file != nil {
-		l.fileInfo = log.New(file, levelPrefix("INFO", false), flags)
-		l.fileWarn = log.New(file, levelPrefix("WARN", false), flags)
-		l.fileError = log.New(file, levelPrefix("ERROR", false), flags)
-		l.fileDebug = log.New(file, levelPrefix("DEBUG", false), flags)
-	}
-
-	return l
-}
-
-func (l *Logger) Debug(format string, v ...interface{}) {
-	if l.level == LogLevelDebug {
-		l.consoleDebug.Printf(format, v...)
-		if l.fileDebug != nil {
-			l.fileDebug.Printf(format, v...)
-		}
-	}
-}
-
-func (l *Logger) Info(format string, v ...interface{}) {
-	if l.level == LogLevelDebug || l.level == LogLevelInfo {
-		l.consoleInfo.Printf(format, v...)
-		if l.fileInfo != nil {
-			l.fileInfo.Printf(format, v...)
-		}
-	}
-}
-
-func (l *Logger) Warn(format string, v ...interface{}) {
-	if l.level != LogLevelError {
-		l.consoleWarn.Printf(format, v...)
-		if l.fileWarn != nil {
-			l.fileWarn.Printf(format, v...)
-		}
-	}
-}
-
-func (l *Logger) Error(format string, v ...interface{}) {
-	l.consoleError.Printf(format, v...)
-	if l.fileError != nil {
-		l.fileError.Printf(format, v...)
-	}
-}
-
-func initLogger() error {
-	cfg := getConfigSnapshot()
-	if cfg.LogFile == "" {
-		logger = newLogger(cfg.LogLevel, os.Stdout, nil)
-		return nil
-	}
-
-	output, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err != nil {
-		return err
-	}
-	logger = newLogger(cfg.LogLevel, os.Stdout, output)
-	return nil
 }

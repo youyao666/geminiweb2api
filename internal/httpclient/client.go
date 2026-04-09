@@ -1,4 +1,4 @@
-package main
+package httpclient
 
 import (
 	"net"
@@ -6,29 +6,32 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"main/internal/config"
+	"main/internal/logging"
 )
 
 const (
-	GeminiURL     = "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate"
-	GeminiHomeURL = "https://gemini.google.com/"
+	DefaultGeminiURL     = "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate"
+	DefaultGeminiHomeURL = "https://gemini.google.com/"
 )
 
-type geminiEndpoints struct {
-	url     string
-	home    string
-	origin  string
-	referer string
+type GeminiEndpoints struct {
+	URL     string
+	Home    string
+	Origin  string
+	Referer string
 }
 
-func currentGeminiEndpoints() geminiEndpoints {
-	cfg := getConfigSnapshot()
+func CurrentGeminiEndpoints(cfg config.Config) GeminiEndpoints {
 	postURL := strings.TrimSpace(cfg.GeminiURL)
 	if postURL == "" {
-		postURL = GeminiURL
+		postURL = DefaultGeminiURL
 	}
+
 	homeURL := strings.TrimSpace(cfg.GeminiHomeURL)
 	if homeURL == "" {
-		homeURL = GeminiHomeURL
+		homeURL = DefaultGeminiHomeURL
 	}
 
 	origin := "https://gemini.google.com"
@@ -41,17 +44,18 @@ func currentGeminiEndpoints() geminiEndpoints {
 		referer = origin + "/"
 	}
 
-	return geminiEndpoints{url: postURL, home: homeURL, origin: origin, referer: referer}
+	return GeminiEndpoints{
+		URL:     postURL,
+		Home:    homeURL,
+		Origin:  origin,
+		Referer: referer,
+	}
 }
 
-var httpClient *http.Client
-
-func initHTTPClient() {
-	cfg := getConfigSnapshot()
+func New(cfg config.Config, logger *logging.Logger) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
 		KeepAlive: 30 * time.Second,
-		DualStack: true,
 	}
 
 	transport := &http.Transport{
@@ -67,8 +71,7 @@ func initHTTPClient() {
 
 	proxyConfigured := false
 	if strings.TrimSpace(cfg.Proxy) != "" {
-		proxyURLStr := strings.TrimSpace(cfg.Proxy)
-		proxyURL, err := url.Parse(proxyURLStr)
+		proxyURL, err := url.Parse(strings.TrimSpace(cfg.Proxy))
 		if err == nil {
 			transport.Proxy = http.ProxyURL(proxyURL)
 			proxyConfigured = true
@@ -77,37 +80,40 @@ func initHTTPClient() {
 		}
 	}
 
-	httpClient = &http.Client{
+	client := &http.Client{
 		Transport: transport,
 		Timeout:   120 * time.Second,
 	}
 
 	if proxyConfigured {
-		go testProxyConnectivity(cfg.Proxy)
+		go testProxyConnectivity(client, cfg.Proxy, logger)
 	} else {
 		logger.Info("HTTP 客户端已初始化 (未配置显式代理)")
 	}
+
+	return client
 }
 
-func testProxyConnectivity(proxyStr string) {
+func testProxyConnectivity(client *http.Client, proxyStr string, logger *logging.Logger) {
 	logger.Info("正在测试代理连通性: %s", proxyStr)
-	testURL := "https://www.google.com"
-	req, _ := http.NewRequest("HEAD", testURL, nil)
+
+	req, _ := http.NewRequest("HEAD", "https://www.google.com", nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		logger.Warn("代理检测失败 (可能是暂时的): %v。请求仍将尝试进行重试。", err)
 		return
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
 		logger.Info("代理连通性验证成功: %s", proxyStr)
-	} else {
-		logger.Warn("代理检测返回异常状态码: %d。请检查您的代理设置。", resp.StatusCode)
+		return
 	}
+	logger.Warn("代理检测返回异常状态码: %d。请检查您的代理设置。", resp.StatusCode)
 }
 
-func isConnectionError(err error) bool {
+func IsConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}

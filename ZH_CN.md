@@ -26,8 +26,16 @@ cd e:/Project/AI/All2API/geminiweb2api
 
 ```bash
 go mod tidy
-go run .
+go run ./cmd/geminiweb2api
 ```
+
+当前目录结构已按职责拆分：
+
+- `cmd/geminiweb2api`：程序入口
+- `internal/server`：HTTP 服务装配与路由
+- `internal/gemini`：Gemini 请求与响应处理
+- `internal/config`、`internal/logging`、`internal/httpclient`、`internal/token`、`internal/metrics`：基础设施模块
+- `internal/web`：内嵌 WebUI 与帮助页
 
 3. 默认监听地址：
 

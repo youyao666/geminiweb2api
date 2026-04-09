@@ -27,42 +27,47 @@ jobs:
       - name: 📦 下载依赖
         run: go mod download
 
+      - name: ✅ 校验项目可编译
+        run: go build ./...
+
       - name: 🔨 构建项目
         run: |
+          BUILD_TARGET=./cmd/geminiweb2api
+
           # Linux builds
-          GOOS=linux GOARCH=amd64 go build -v -o GeminiWeb2API-linux-amd64
-          GOOS=linux GOARCH=arm64 go build -v -o GeminiWeb2API-linux-arm64
-          GOOS=linux GOARCH=386 go build -v -o GeminiWeb2API-linux-386
+          GOOS=linux GOARCH=amd64 go build -v -o GeminiWeb2API-linux-amd64 $BUILD_TARGET
+          GOOS=linux GOARCH=arm64 go build -v -o GeminiWeb2API-linux-arm64 $BUILD_TARGET
+          GOOS=linux GOARCH=386 go build -v -o GeminiWeb2API-linux-386 $BUILD_TARGET
           
           # Windows builds
-          GOOS=windows GOARCH=amd64 go build -v -o GeminiWeb2API-windows-amd64.exe
-          GOOS=windows GOARCH=arm64 go build -v -o GeminiWeb2API-windows-arm64.exe
-          GOOS=windows GOARCH=386 go build -v -o GeminiWeb2API-windows-386.exe
+          GOOS=windows GOARCH=amd64 go build -v -o GeminiWeb2API-windows-amd64.exe $BUILD_TARGET
+          GOOS=windows GOARCH=arm64 go build -v -o GeminiWeb2API-windows-arm64.exe $BUILD_TARGET
+          GOOS=windows GOARCH=386 go build -v -o GeminiWeb2API-windows-386.exe $BUILD_TARGET
           
           # macOS builds
-          GOOS=darwin GOARCH=amd64 go build -v -o GeminiWeb2API-darwin-amd64
-          GOOS=darwin GOARCH=arm64 go build -v -o GeminiWeb2API-darwin-arm64
+          GOOS=darwin GOARCH=amd64 go build -v -o GeminiWeb2API-darwin-amd64 $BUILD_TARGET
+          GOOS=darwin GOARCH=arm64 go build -v -o GeminiWeb2API-darwin-arm64 $BUILD_TARGET
 
           # FreeBSD builds
-          GOOS=freebsd GOARCH=amd64 go build -v -o GeminiWeb2API-freebsd-amd64
-          GOOS=freebsd GOARCH=arm64 go build -v -o GeminiWeb2API-freebsd-arm64
+          GOOS=freebsd GOARCH=amd64 go build -v -o GeminiWeb2API-freebsd-amd64 $BUILD_TARGET
+          GOOS=freebsd GOARCH=arm64 go build -v -o GeminiWeb2API-freebsd-arm64 $BUILD_TARGET
 
           # Other Linux architectures
-          GOOS=linux GOARCH=riscv64 go build -v -o GeminiWeb2API-linux-riscv64
-          GOOS=linux GOARCH=ppc64 go build -v -o GeminiWeb2API-linux-ppc64
+          GOOS=linux GOARCH=riscv64 go build -v -o GeminiWeb2API-linux-riscv64 $BUILD_TARGET
+          GOOS=linux GOARCH=ppc64 go build -v -o GeminiWeb2API-linux-ppc64 $BUILD_TARGET
 
           # DragonFly BSD
-          GOOS=dragonfly GOARCH=amd64 go build -v -o GeminiWeb2API-dragonfly-amd64
+          GOOS=dragonfly GOARCH=amd64 go build -v -o GeminiWeb2API-dragonfly-amd64 $BUILD_TARGET
 
           # Solaris
-          GOOS=solaris GOARCH=amd64 go build -v -o GeminiWeb2API-solaris-amd64
+          GOOS=solaris GOARCH=amd64 go build -v -o GeminiWeb2API-solaris-amd64 $BUILD_TARGET
 
           # AIX
-          GOOS=aix GOARCH=ppc64 go build -v -o GeminiWeb2API-aix-ppc64
+          GOOS=aix GOARCH=ppc64 go build -v -o GeminiWeb2API-aix-ppc64 $BUILD_TARGET
 
           # Plan9
-          GOOS=plan9 GOARCH=amd64 go build -v -o GeminiWeb2API-plan9-amd64
-          GOOS=plan9 GOARCH=386 go build -v -o GeminiWeb2API-plan9-386
+          GOOS=plan9 GOARCH=amd64 go build -v -o GeminiWeb2API-plan9-amd64 $BUILD_TARGET
+          GOOS=plan9 GOARCH=386 go build -v -o GeminiWeb2API-plan9-386 $BUILD_TARGET
 
       - name: 🚀 运行 release-please，生成版本和 Release Notes
         id: release

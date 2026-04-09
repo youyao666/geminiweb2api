@@ -1,4 +1,4 @@
-package main
+package gemini
 
 import (
 	"encoding/json"
@@ -12,7 +12,36 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"main/internal/config"
+	"main/internal/httpclient"
+	"main/internal/logging"
+	metricspkg "main/internal/metrics"
+	"main/internal/support"
+	"main/internal/token"
 )
+
+var (
+	depGetConfig     func() config.Config
+	depGetHTTPClient func() *http.Client
+	depGetLogger     func() *logging.Logger
+	depMetrics       *metricspkg.Metrics
+	depTokens        *token.Manager
+)
+
+func Initialize(
+	getConfig func() config.Config,
+	getHTTPClient func() *http.Client,
+	getLogger func() *logging.Logger,
+	metrics *metricspkg.Metrics,
+	tokens *token.Manager,
+) {
+	depGetConfig = getConfig
+	depGetHTTPClient = getHTTPClient
+	depGetLogger = getLogger
+	depMetrics = metrics
+	depTokens = tokens
+}
 
 type GeminiSession struct {
 	mu             sync.RWMutex
@@ -230,7 +259,7 @@ func buildToolsPrompt(tools []Tool) string {
 	return sb.String()
 }
 
-func buildPrompt(req ChatCompletionRequest) string {
+func BuildPrompt(req ChatCompletionRequest) string {
 	var prompt strings.Builder
 	toolsPrompt := buildToolsPrompt(req.Tools)
 	if toolsPrompt != "" {
@@ -274,7 +303,7 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 		for _, t := range tools {
 			if t.Function.Name == name {
 				toolCalls = append(toolCalls, ToolCall{
-					ID:   fmt.Sprintf("call_%s_%d", generateRandomHex(8), i),
+					ID:   fmt.Sprintf("call_%s_%d", support.GenerateRandomHex(8), i),
 					Type: "function",
 					Function: FunctionCall{
 						Name:      name,
@@ -301,7 +330,7 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 
 		jsonStr := match[1]
 		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
-			logger.Debug("解析工具调用失败: %v", err)
+			depGetLogger().Debug("解析工具调用失败: %v", err)
 			continue
 		}
 		toolExists := false
@@ -316,7 +345,7 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 		}
 
 		toolCall := ToolCall{
-			ID:   fmt.Sprintf("call_%s_%d", generateRandomHex(8), i),
+			ID:   fmt.Sprintf("call_%s_%d", support.GenerateRandomHex(8), i),
 			Type: "function",
 			Function: FunctionCall{
 				Name:      tc.Name,
@@ -331,28 +360,28 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 }
 
 func buildGeminiRequest(prompt string, session *GeminiSession, modelName string, snlm0eToken string) (*http.Request, error) {
-	refreshTokenIfNeeded()
+	depTokens.RefreshTokenIfNeeded()
 
-	uuid := generateUUIDv4()
+	uuid := support.GenerateUUIDv4()
 	modelID := modelIDMap["gemini-3-flash"]
 	if id, ok := modelIDMap[modelName]; ok {
 		modelID = id
-		logger.Debug("正在使用模型: %s -> %s", modelName, modelID)
+		depGetLogger().Debug("正在使用模型: %s -> %s", modelName, modelID)
 	}
 
 	var contextArray []interface{}
 	sessionSnapshot := session.Snapshot()
 	if sessionSnapshot.ConversationID != "" {
 		contextArray = []interface{}{sessionSnapshot.ConversationID, sessionSnapshot.ResponseID, sessionSnapshot.ChoiceID, nil, nil, nil, nil, nil, nil, ""}
-		logger.Debug("正在使用现有会话: c=%s, r=%s, rc=%s", sessionSnapshot.ConversationID, sessionSnapshot.ResponseID, sessionSnapshot.ChoiceID)
+		depGetLogger().Debug("正在使用现有会话: c=%s, r=%s, rc=%s", sessionSnapshot.ConversationID, sessionSnapshot.ResponseID, sessionSnapshot.ChoiceID)
 	} else {
 		contextArray = []interface{}{nil, nil, nil, nil, nil, nil, nil, nil, nil, ""}
-		logger.Debug("正在开始新对话")
+		depGetLogger().Debug("正在开始新对话")
 	}
 
 	currentToken := snlm0eToken
 	if currentToken == "" {
-		currentToken = getToken()
+		currentToken = depTokens.GetToken()
 	}
 
 	innerArray := []interface{}{
@@ -379,8 +408,8 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	freqData := fmt.Sprintf(`[null,%q]`, string(innerJSON))
 	data := url.Values{}
 	data.Set("f.req", freqData)
-	endpoints := currentGeminiEndpoints()
-	requestURL, err := buildGeminiRequestURL(endpoints.url)
+	endpoints := httpclient.CurrentGeminiEndpoints(depGetConfig())
+	requestURL, err := buildGeminiRequestURL(endpoints.URL)
 	if err != nil {
 		return nil, err
 	}
@@ -394,14 +423,14 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 	req.Header.Set("accept-language", "zh-CN")
-	if cfg := getConfigSnapshot(); cfg.Cookies != "" {
+	if cfg := depGetConfig(); cfg.Cookies != "" {
 		req.Header.Set("Cookie", cfg.Cookies)
 	}
 	req.Header.Set("cache-control", "no-cache")
-	req.Header.Set("origin", endpoints.origin)
+	req.Header.Set("origin", endpoints.Origin)
 	req.Header.Set("pragma", "no-cache")
 	req.Header.Set("priority", "u=1, i")
-	req.Header.Set("referer", endpoints.referer)
+	req.Header.Set("referer", endpoints.Referer)
 	req.Header.Set("sec-ch-ua", `"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"`)
 	req.Header.Set("sec-ch-ua-arch", `"x86"`)
 	req.Header.Set("sec-ch-ua-bitness", `"64"`)
@@ -420,10 +449,10 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	req.Header.Set("x-goog-ext-73010989-jspb", "[0]")
 	req.Header.Set("x-goog-ext-73010990-jspb", "[0]")
 	req.Header.Set("x-same-domain", "1")
-	randomIP := generateRandomIP()
+	randomIP := support.GenerateRandomIP()
 	req.Header.Set("X-Forwarded-For", randomIP)
 	req.Header.Set("X-Real-IP", randomIP)
-	logger.Debug("正在使用随机 XFF IP: %s", randomIP)
+	depGetLogger().Debug("正在使用随机 XFF IP: %s", randomIP)
 	return req, nil
 }
 
@@ -441,60 +470,60 @@ func buildGeminiRequestURL(rawURL string) (string, error) {
 		query.Set("rt", "c")
 	}
 	if query.Get("bl") == "" {
-		if blToken := getBLToken(); blToken != "" {
+		if blToken := depTokens.GetBLToken(); blToken != "" {
 			query.Set("bl", blToken)
 		}
 	}
 	if query.Get("f.sid") == "" {
-		if fsid := getFSID(); fsid != "" {
+		if fsid := depTokens.GetFSID(); fsid != "" {
 			query.Set("f.sid", fsid)
 		}
 	}
-	query.Set("_reqid", nextReqID())
+	query.Set("_reqid", depTokens.NextReqID())
 	parsedURL.RawQuery = query.Encode()
 	return parsedURL.String(), nil
 }
 
-func handleStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string) {
+func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, writeError func(http.ResponseWriter, int, string)) {
 	start := time.Now()
 	const maxRetries = 3
 	var bodyStr, content, lastErr string
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			logger.Info("流式请求正在进行第 %d/%d 次重试", attempt, maxRetries)
-			snlm0eToken, _ = tokenManager.GetTokenForSession(sessionKey, true)
+			depGetLogger().Info("流式请求正在进行第 %d/%d 次重试", attempt, maxRetries)
+			snlm0eToken, _ = depTokens.GetTokenForSession(sessionKey, true)
 			time.Sleep(time.Duration(attempt*500) * time.Millisecond)
 		}
 
 		req, err := buildGeminiRequest(prompt, session, model, snlm0eToken)
 		if err != nil {
-			logger.Error("构建 Gemini 请求失败: %v", err)
+			depGetLogger().Error("构建 Gemini 请求失败: %v", err)
 			lastErr = err.Error()
 			continue
 		}
 
-		logger.Debug("正在发送请求到 Gemini API...")
-		resp, err := httpClient.Do(req)
+		depGetLogger().Debug("正在发送请求到 Gemini API...")
+		resp, err := depGetHTTPClient().Do(req)
 		if err != nil {
-			if isConnectionError(err) {
-				logger.Warn("通过代理连接出错 (尝试 %d/%d): %v", attempt, maxRetries, err)
+			if httpclient.IsConnectionError(err) {
+				depGetLogger().Warn("通过代理连接出错 (尝试 %d/%d): %v", attempt, maxRetries, err)
 			} else {
-				logger.Error("Gemini API 请求失败: %v", err)
+				depGetLogger().Error("Gemini API 请求失败: %v", err)
 			}
 			lastErr = err.Error()
 			continue
 		}
 
-		logger.Debug("Gemini API 响应状态码: %d", resp.StatusCode)
+		depGetLogger().Debug("Gemini API 响应状态码: %d", resp.StatusCode)
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			bodyStr = string(body)
-			logger.Error("Gemini API 返回错误状态码 %d: %s", resp.StatusCode, bodyStr)
+			depGetLogger().Error("Gemini API 返回错误状态码 %d: %s", resp.StatusCode, bodyStr)
 			if isHTMLErrorResponse(bodyStr) {
-				logger.Warn("检测到 HTML 错误响应，已标记会话令牌失效")
-				tokenManager.MarkSessionTokenBad(sessionKey)
+				depGetLogger().Warn("检测到 HTML 错误响应，已标记会话令牌失效")
+				depTokens.MarkSessionTokenBad(sessionKey)
 			}
 			lastErr = fmt.Sprintf("Gemini API error: %d", resp.StatusCode)
 			continue
@@ -506,12 +535,12 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 			continue
 		}
 
-		logger.Debug("流式响应体大小: %d 字节", len(body))
+		depGetLogger().Debug("流式响应体大小: %d 字节", len(body))
 		bodyStr = string(body)
 
 		if isHTMLErrorResponse(bodyStr) {
-			logger.Warn("响应体中检测到 HTML 错误，已标记会话令牌失效")
-			tokenManager.MarkSessionTokenBad(sessionKey)
+			depGetLogger().Warn("响应体中检测到 HTML 错误，已标记会话令牌失效")
+			depTokens.MarkSessionTokenBad(sessionKey)
 			lastErr = "Request failed due to token issue"
 			continue
 		}
@@ -520,8 +549,8 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 		content = filterContent(content)
 
 		if content == "" && isEmptyAcknowledgmentResponse(bodyStr) {
-			logger.Error("流式响应收到空的确认包 - 令牌可能已失效或过期")
-			tokenManager.MarkSessionTokenBad(sessionKey)
+			depGetLogger().Error("流式响应收到空的确认包 - 令牌可能已失效或过期")
+			depTokens.MarkSessionTokenBad(sessionKey)
 			lastErr = "Gemini returned empty response - token issue"
 			continue
 		}
@@ -531,8 +560,8 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 	}
 
 	if lastErr != "" {
-		logger.Error("所有 %d 次重试均失败，最后一次错误: %s", maxRetries, lastErr)
-		metrics.AddRequest(false, len(prompt)/4, 0)
+		depGetLogger().Error("所有 %d 次重试均失败，最后一次错误: %s", maxRetries, lastErr)
+		depMetrics.AddRequest(false, len(prompt)/4, 0)
 		writeError(w, http.StatusBadGateway, lastErr)
 		return
 	}
@@ -552,7 +581,7 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 	sendStreamChunkWithConversation(w, flusher, model, "", "assistant", false, sessionSnapshot.ConversationID)
 
 	if content != "" {
-		logger.Debug("已提取流式内容 (长度=%d): %.100s", len(content), content)
+		depGetLogger().Debug("已提取流式内容 (长度=%d): %.100s", len(content), content)
 		cleanContent, toolCalls := parseToolCalls(content, tools)
 		cleanContent = filterContent(cleanContent)
 		if len(toolCalls) > 0 {
@@ -564,7 +593,7 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 
 	inputTokens := len(prompt) / 4
 	outputTokens := len(content) / 4
-	metrics.AddRequest(true, inputTokens, outputTokens)
+	depMetrics.AddRequest(true, inputTokens, outputTokens)
 	_, toolCalls := parseToolCalls(content, tools)
 	if len(toolCalls) > 0 {
 		sendStreamChunkFinish(w, flusher, model, "tool_calls")
@@ -573,7 +602,7 @@ func handleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 	}
 	w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
-	logger.Info("流式响应完成，耗时 %.3fms", float64(time.Since(start).Microseconds())/1000)
+	depGetLogger().Info("流式响应完成，耗时 %.3fms", float64(time.Since(start).Microseconds())/1000)
 }
 
 func sendStreamChunk(w http.ResponseWriter, flusher http.Flusher, model string, content string, role string, isFinish bool) {
@@ -649,32 +678,32 @@ func sendStreamChunkFinish(w http.ResponseWriter, flusher http.Flusher, model st
 	flusher.Flush()
 }
 
-func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string) {
+func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, writeError func(http.ResponseWriter, int, string), writeJSON func(http.ResponseWriter, int, interface{})) {
 	start := time.Now()
 	const maxRetries = 3
 	var bodyStr, content, lastErr string
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			logger.Info("非流式请求正在进行第 %d/%d 次重试", attempt, maxRetries)
-			snlm0eToken, _ = tokenManager.GetTokenForSession(sessionKey, true)
+			depGetLogger().Info("非流式请求正在进行第 %d/%d 次重试", attempt, maxRetries)
+			snlm0eToken, _ = depTokens.GetTokenForSession(sessionKey, true)
 			time.Sleep(time.Duration(attempt*500) * time.Millisecond)
 		}
 
 		req, err := buildGeminiRequest(prompt, session, model, snlm0eToken)
 		if err != nil {
-			logger.Error("构建 Gemini 请求失败: %v", err)
+			depGetLogger().Error("构建 Gemini 请求失败: %v", err)
 			lastErr = err.Error()
 			continue
 		}
 
-		logger.Debug("正在发送请求到 Gemini API...")
-		resp, err := httpClient.Do(req)
+		depGetLogger().Debug("正在发送请求到 Gemini API...")
+		resp, err := depGetHTTPClient().Do(req)
 		if err != nil {
-			if isConnectionError(err) {
-				logger.Warn("通过代理连接出错 (尝试 %d/%d): %v", attempt, maxRetries, err)
+			if httpclient.IsConnectionError(err) {
+				depGetLogger().Warn("通过代理连接出错 (尝试 %d/%d): %v", attempt, maxRetries, err)
 			} else {
-				logger.Error("Gemini API 请求失败: %v", err)
+				depGetLogger().Error("Gemini API 请求失败: %v", err)
 			}
 			lastErr = err.Error()
 			continue
@@ -685,23 +714,23 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 			lastErr = err.Error()
 			continue
 		}
-		logger.Debug("Gemini API 响应状态码: %d", resp.StatusCode)
-		logger.Debug("响应体大小: %d 字节", len(body))
+		depGetLogger().Debug("Gemini API 响应状态码: %d", resp.StatusCode)
+		depGetLogger().Debug("响应体大小: %d 字节", len(body))
 		bodyStr = string(body)
 
 		if resp.StatusCode != http.StatusOK {
-			logger.Error("Gemini API 返回错误状态码 %d: %s", resp.StatusCode, bodyStr)
+			depGetLogger().Error("Gemini API 返回错误状态码 %d: %s", resp.StatusCode, bodyStr)
 			if isHTMLErrorResponse(bodyStr) {
-				logger.Warn("检测到 HTML 错误响应，已标记会话令牌失效")
-				tokenManager.MarkSessionTokenBad(sessionKey)
+				depGetLogger().Warn("检测到 HTML 错误响应，已标记会话令牌失效")
+				depTokens.MarkSessionTokenBad(sessionKey)
 			}
 			lastErr = fmt.Sprintf("Gemini API error: %d", resp.StatusCode)
 			continue
 		}
 
 		if isHTMLErrorResponse(bodyStr) {
-			logger.Warn("响应体中检测到 HTML 错误，已标记会话令牌失效")
-			tokenManager.MarkSessionTokenBad(sessionKey)
+			depGetLogger().Warn("响应体中检测到 HTML 错误，已标记会话令牌失效")
+			depTokens.MarkSessionTokenBad(sessionKey)
 			lastErr = "Request failed due to token issue"
 			continue
 		}
@@ -710,10 +739,10 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		content = filterContent(content)
 
 		if content == "" {
-			logger.Warn("从响应中提取的内容为空，响应体预览: %.500s", bodyStr)
+			depGetLogger().Warn("从响应中提取的内容为空，响应体预览: %.500s", bodyStr)
 			if isEmptyAcknowledgmentResponse(bodyStr) {
-				logger.Error("收到空的确认响应 - 令牌可能已失效或过期")
-				tokenManager.MarkSessionTokenBad(sessionKey)
+				depGetLogger().Error("收到空的确认响应 - 令牌可能已失效或过期")
+				depTokens.MarkSessionTokenBad(sessionKey)
 				lastErr = "Gemini returned empty response - token issue"
 				continue
 			}
@@ -724,8 +753,8 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 	}
 
 	if lastErr != "" {
-		logger.Error("所有 %d 次重试均失败，最后一次错误: %s", maxRetries, lastErr)
-		metrics.AddRequest(false, len(prompt)/4, 0)
+		depGetLogger().Error("所有 %d 次重试均失败，最后一次错误: %s", maxRetries, lastErr)
+		depMetrics.AddRequest(false, len(prompt)/4, 0)
 		writeError(w, http.StatusBadGateway, lastErr)
 		return
 	}
@@ -736,9 +765,9 @@ func handleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 
 	inputTokens := len(prompt) / 4
 	outputTokens := len(content) / 4
-	metrics.AddRequest(true, inputTokens, outputTokens)
+	depMetrics.AddRequest(true, inputTokens, outputTokens)
 
-	logger.Info("非流式响应完成，耗时 %.3fms，内容长度: %d",
+	depGetLogger().Info("非流式响应完成，耗时 %.3fms，内容长度: %d",
 		float64(time.Since(start).Microseconds())/1000, len(content))
 
 	finishReason := "stop"
@@ -802,7 +831,7 @@ func updateSessionFromResponse(session *GeminiSession, body string) {
 	session.mu.Unlock()
 
 	if snapshot.ConversationID != "" {
-		logger.Debug("会话已更新: c=%s, r=%s, rc=%s", snapshot.ConversationID, snapshot.ResponseID, snapshot.ChoiceID)
+		depGetLogger().Debug("会话已更新: c=%s, r=%s, rc=%s", snapshot.ConversationID, snapshot.ResponseID, snapshot.ChoiceID)
 	}
 }
 
@@ -1058,11 +1087,11 @@ func readResponseBody(resp *http.Response, mode string) ([]byte, error) {
 	}
 
 	if isRetryableBodyReadError(err) && len(body) > 0 {
-		logger.Warn("%s响应读取不完整，已使用部分响应继续处理: %v (已读 %d 字节)", mode, err, len(body))
+		depGetLogger().Warn("%s响应读取不完整，已使用部分响应继续处理: %v (已读 %d 字节)", mode, err, len(body))
 		return body, nil
 	}
 
-	logger.Error("读取%s响应体失败: %v", mode, err)
+	depGetLogger().Error("读取%s响应体失败: %v", mode, err)
 	return nil, err
 }
 

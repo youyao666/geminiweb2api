@@ -1,6 +1,7 @@
-package main
+package metrics
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -12,12 +13,16 @@ type Metrics struct {
 	InputTokens     uint64    `json:"input_tokens"`
 	OutputTokens    uint64    `json:"output_tokens"`
 	StartTime       time.Time `json:"-"`
-	RecentRequests  []int64   `json:"-"`
+
+	mu             sync.Mutex
+	RecentRequests []int64 `json:"-"`
 }
 
-var metrics = &Metrics{
-	StartTime:      time.Now(),
-	RecentRequests: make([]int64, 0),
+func New() *Metrics {
+	return &Metrics{
+		StartTime:      time.Now(),
+		RecentRequests: make([]int64, 0),
+	}
 }
 
 func (m *Metrics) AddRequest(success bool, inputTokens, outputTokens int) {
@@ -29,14 +34,21 @@ func (m *Metrics) AddRequest(success bool, inputTokens, outputTokens int) {
 	}
 	atomic.AddUint64(&m.InputTokens, uint64(inputTokens))
 	atomic.AddUint64(&m.OutputTokens, uint64(outputTokens))
+
+	m.mu.Lock()
 	m.RecentRequests = append(m.RecentRequests, time.Now().Unix())
+	m.mu.Unlock()
 }
 
 func (m *Metrics) GetRPM() float64 {
 	now := time.Now().Unix()
 	oneMinuteAgo := now - 60
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	count := 0
-	var recent []int64
+	recent := m.RecentRequests[:0]
 	for _, t := range m.RecentRequests {
 		if t >= oneMinuteAgo {
 			count++
