@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/XxxXTeam/geminiweb2api/compare/v0.2.0...v0.3.0) (2026-04-09)
+
+
+### ✨ 新功能
+
+* 优化目录结构! ([4b97327](https://github.com/XxxXTeam/geminiweb2api/commit/4b97327097355a175698311324e6745080f787f7))
+
 ## [0.2.0](https://github.com/XxxXTeam/geminiweb2api/compare/v0.1.0...v0.2.0) (2026-04-09)
 
 
