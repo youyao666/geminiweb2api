@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/XxxXTeam/geminiweb2api/compare/v0.3.0...v0.4.0) (2026-04-11)
+
+
+### ✨ 新功能
+
+* 更新模型id与请求配置 ([58371ea](https://github.com/XxxXTeam/geminiweb2api/commit/58371ea67968bea175ad8ff37c8d6ffca2c8fe3e))
+
 ## [0.3.0](https://github.com/XxxXTeam/geminiweb2api/compare/v0.2.0...v0.3.0) (2026-04-09)
 
 
