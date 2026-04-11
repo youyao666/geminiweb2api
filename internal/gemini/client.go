@@ -178,30 +178,96 @@ type ErrorResponse struct {
 }
 
 var errorCodeMap = map[int]string{
-	0: "success",
-	1: "invalid_request",
-	2: "rate_limit_exceeded",
-	3: "content_filtered",
-	4: "authentication_error",
-	5: "server_error",
-	6: "timeout",
-	7: "model_overloaded",
-	8: "context_length_exceeded",
+	0:    "success",
+	1:    "invalid_request",
+	2:    "rate_limit_exceeded",
+	3:    "content_filtered",
+	4:    "authentication_error",
+	5:    "server_error",
+	6:    "timeout",
+	7:    "model_overloaded",
+	8:    "context_length_exceeded",
+	1013: "temporary_stream_error",
+	1037: "usage_limit_exceeded",
+	1050: "model_inconsistent",
+	1052: "model_header_invalid",
+	1060: "ip_temporarily_blocked",
+	1016: "unauthenticated",
 }
 
-var modelIDMap = map[string]string{
-	"gemini-3-flash":           "1640bdc9f7ef4826",
-	"gemini-3":                 "1640bdc9f7ef4826",
-	"gemini-2.5-flash":         "e6fa609c3fa255c0",
-	"gemini-2.5-pro":           "9d8ca3786ebdfbea",
-	"gemini-3.1-pro":           "9d8ca3786ebdfbea",
-	"gemini-3.1":               "9d8ca3786ebdfbea",
-	"gemini-2-flash":           "203e6bb81620bcfe",
-	"gemini-2.0-flash":         "203e6bb81620bcfe",
-	"gemini-flash":             "1640bdc9f7ef4826",
-	"gemini-pro":               "9d8ca3786ebdfbea",
-	"gemini-3-pro":             "9d8ca3786ebdfbea",
-	"gemini-2.5-flash-preview": "e6fa609c3fa255c0",
+const (
+	geminiInnerReqLen          = 69
+	geminiStreamingFlagIndex   = 7
+	geminiDefaultMetadataSlots = 10
+	geminiWebLanguage          = "zh-CN"
+	headerModelJSPB            = "x-goog-ext-525001261-jspb"
+	headerRequestUUIDJSPB      = "x-goog-ext-525005358-jspb"
+)
+
+type webModelSpec struct {
+	HexID    string
+	Capacity int
+}
+
+var modelSpecMap = map[string]webModelSpec{
+	"gemini-3-flash":               {"fbb127bbb056c959", 1},
+	"gemini-3":                     {"fbb127bbb056c959", 1},
+	"gemini-flash":                 {"fbb127bbb056c959", 1},
+	"gemini-3-flash-thinking":      {"5bf011840784117a", 1},
+	"gemini-3-flash-plus":          {"56fdd199312815e2", 4},
+	"gemini-3-flash-thinking-plus": {"e051ce1aa80aa576", 4},
+	"gemini-3-flash-advanced":      {"56fdd199312815e2", 2},
+	"gemini-3-pro":                 {"9d8ca3786ebdfbea", 1},
+	"gemini-pro":                   {"9d8ca3786ebdfbea", 1},
+	"gemini-2.5-pro":               {"9d8ca3786ebdfbea", 1},
+	"gemini-3-pro-plus":            {"e6fa609c3fa255c0", 4},
+	"gemini-3-pro-advanced":        {"e6fa609c3fa255c0", 2},
+	"gemini-3.1":                   {"e6fa609c3fa255c0", 2},
+	"gemini-3.1-pro":               {"e6fa609c3fa255c0", 2},
+	"gemini-2.5-flash":             {"e6fa609c3fa255c0", 1},
+	"gemini-2.5-flash-preview":     {"e6fa609c3fa255c0", 1},
+	"gemini-2-flash":               {"203e6bb81620bcfe", 1},
+	"gemini-2.0-flash":             {"203e6bb81620bcfe", 1},
+}
+
+func defaultGeminiMetadata() []interface{} {
+	m := make([]interface{}, geminiDefaultMetadataSlots)
+	m[0] = ""
+	m[1] = ""
+	m[2] = ""
+	m[9] = ""
+	return m
+}
+
+func sessionToGeminiMetadata(snapshot GeminiSessionSnapshot) []interface{} {
+	m := defaultGeminiMetadata()
+	if snapshot.ConversationID != "" {
+		m[0] = snapshot.ConversationID
+	}
+	if snapshot.ResponseID != "" {
+		m[1] = snapshot.ResponseID
+	}
+	if snapshot.ChoiceID != "" {
+		m[2] = snapshot.ChoiceID
+	}
+	return m
+}
+
+func buildModelHeaderJSPB(spec webModelSpec) string {
+	return fmt.Sprintf(`[1,null,null,null,"%s",null,null,0,[4],null,null,%d]`, spec.HexID, spec.Capacity)
+}
+
+func noteGeminiResponseErrors(body string, sessionKey string, mode string) {
+	code, msg := parseGeminiErrorCode(body)
+	if code != 0 {
+		depGetLogger().Warn("%s响应含 Gemini 错误码 %d: %s", mode, code, msg)
+		if code == 1052 || code == 1016 {
+			depTokens.MarkSessionTokenBad(sessionKey)
+		}
+	}
+	if hasErr, errStr := checkGeminiError(body); hasErr && code == 0 {
+		depGetLogger().Warn("%s响应: %s", mode, errStr)
+	}
 }
 
 func extractMessageContent(msg Message) string {
@@ -362,20 +428,19 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 func buildGeminiRequest(prompt string, session *GeminiSession, modelName string, snlm0eToken string) (*http.Request, error) {
 	depTokens.RefreshTokenIfNeeded()
 
-	uuid := support.GenerateUUIDv4()
-	modelID := modelIDMap["gemini-3-flash"]
-	if id, ok := modelIDMap[modelName]; ok {
-		modelID = id
-		depGetLogger().Debug("正在使用模型: %s -> %s", modelName, modelID)
+	uuidVal := strings.ToUpper(support.GenerateUUIDv4())
+	spec := modelSpecMap["gemini-3-flash"]
+	if s, ok := modelSpecMap[modelName]; ok {
+		spec = s
+		depGetLogger().Debug("正在使用模型: %s -> %s (capacity=%d)", modelName, spec.HexID, spec.Capacity)
 	}
 
-	var contextArray []interface{}
 	sessionSnapshot := session.Snapshot()
+	meta := defaultGeminiMetadata()
 	if sessionSnapshot.ConversationID != "" {
-		contextArray = []interface{}{sessionSnapshot.ConversationID, sessionSnapshot.ResponseID, sessionSnapshot.ChoiceID, nil, nil, nil, nil, nil, nil, ""}
+		meta = sessionToGeminiMetadata(sessionSnapshot)
 		depGetLogger().Debug("正在使用现有会话: c=%s, r=%s, rc=%s", sessionSnapshot.ConversationID, sessionSnapshot.ResponseID, sessionSnapshot.ChoiceID)
 	} else {
-		contextArray = []interface{}{nil, nil, nil, nil, nil, nil, nil, nil, nil, ""}
 		depGetLogger().Debug("正在开始新对话")
 	}
 
@@ -384,29 +449,32 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 		currentToken = depTokens.GetToken()
 	}
 
-	innerArray := []interface{}{
-		[]interface{}{prompt, 0, nil, nil, nil, nil, 0},
-		[]interface{}{"zh-CN"},
-		contextArray,
-		currentToken,
-		modelID,
-		nil,
-		[]interface{}{0},
-		1, nil, nil, 9, 0, nil, nil, nil, nil, nil,
-		[]interface{}{[]interface{}{1}},
-		0, nil, nil, nil, nil, nil, nil, nil, nil, 1, nil, nil,
-		[]interface{}{4},
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-		[]interface{}{2},
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, 0, nil, nil, nil, nil, nil,
-		uuid,
-		nil,
-		[]interface{}{},
-	}
+	messageContent := []interface{}{prompt, 0, nil, nil, nil, nil, 0}
+	inner := make([]interface{}, geminiInnerReqLen)
+	inner[0] = messageContent
+	inner[1] = []interface{}{geminiWebLanguage}
+	inner[2] = meta
+	inner[6] = []interface{}{1}
+	inner[geminiStreamingFlagIndex] = 1
+	inner[10] = 1
+	inner[11] = 0
+	inner[17] = []interface{}{[]interface{}{0}}
+	inner[18] = 0
+	inner[27] = 1
+	inner[30] = []interface{}{4}
+	inner[41] = []interface{}{1}
+	inner[53] = 0
+	inner[59] = uuidVal
+	inner[61] = []interface{}{}
+	inner[68] = 2
 
-	innerJSON, _ := json.Marshal(innerArray)
+	innerJSON, err := json.Marshal(inner)
+	if err != nil {
+		return nil, fmt.Errorf("marshal f.req inner: %w", err)
+	}
 	freqData := fmt.Sprintf(`[null,%q]`, string(innerJSON))
 	data := url.Values{}
+	data.Set("at", currentToken)
 	data.Set("f.req", freqData)
 	endpoints := httpclient.CurrentGeminiEndpoints(depGetConfig())
 	requestURL, err := buildGeminiRequestURL(endpoints.URL)
@@ -445,7 +513,8 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	req.Header.Set("sec-fetch-dest", "empty")
 	req.Header.Set("sec-fetch-mode", "cors")
 	req.Header.Set("sec-fetch-site", "same-origin")
-	req.Header.Set("x-goog-ext-525005358-jspb", fmt.Sprintf(`["%s",1]`, uuid))
+	req.Header.Set(headerModelJSPB, buildModelHeaderJSPB(spec))
+	req.Header.Set(headerRequestUUIDJSPB, fmt.Sprintf(`["%s",1]`, uuidVal))
 	req.Header.Set("x-goog-ext-73010989-jspb", "[0]")
 	req.Header.Set("x-goog-ext-73010990-jspb", "[0]")
 	req.Header.Set("x-same-domain", "1")
@@ -537,6 +606,7 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 
 		depGetLogger().Debug("流式响应体大小: %d 字节", len(body))
 		bodyStr = string(body)
+		noteGeminiResponseErrors(bodyStr, sessionKey, "流式")
 
 		if isHTMLErrorResponse(bodyStr) {
 			depGetLogger().Warn("响应体中检测到 HTML 错误，已标记会话令牌失效")
@@ -548,11 +618,18 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 		content = extractFinalContent(bodyStr)
 		content = filterContent(content)
 
-		if content == "" && isEmptyAcknowledgmentResponse(bodyStr) {
-			depGetLogger().Error("流式响应收到空的确认包 - 令牌可能已失效或过期")
-			depTokens.MarkSessionTokenBad(sessionKey)
-			lastErr = "Gemini returned empty response - token issue"
-			continue
+		if content == "" {
+			if code, msg := parseGeminiErrorCode(bodyStr); code != 0 {
+				depGetLogger().Error("流式响应无正文，错误码 %d: %s", code, msg)
+				lastErr = fmt.Sprintf("Gemini error %d: %s", code, msg)
+				continue
+			}
+			if isEmptyAcknowledgmentResponse(bodyStr) {
+				depGetLogger().Error("流式响应收到空的确认包 - 令牌可能已失效或过期")
+				depTokens.MarkSessionTokenBad(sessionKey)
+				lastErr = "Gemini returned empty response - token issue"
+				continue
+			}
 		}
 
 		lastErr = ""
@@ -717,6 +794,7 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		depGetLogger().Debug("Gemini API 响应状态码: %d", resp.StatusCode)
 		depGetLogger().Debug("响应体大小: %d 字节", len(body))
 		bodyStr = string(body)
+		noteGeminiResponseErrors(bodyStr, sessionKey, "非流式")
 
 		if resp.StatusCode != http.StatusOK {
 			depGetLogger().Error("Gemini API 返回错误状态码 %d: %s", resp.StatusCode, bodyStr)
@@ -739,6 +817,11 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		content = filterContent(content)
 
 		if content == "" {
+			if code, msg := parseGeminiErrorCode(bodyStr); code != 0 {
+				depGetLogger().Error("非流式响应无正文，错误码 %d: %s", code, msg)
+				lastErr = fmt.Sprintf("Gemini error %d: %s", code, msg)
+				continue
+			}
 			depGetLogger().Warn("从响应中提取的内容为空，响应体预览: %.500s", bodyStr)
 			if isEmptyAcknowledgmentResponse(bodyStr) {
 				depGetLogger().Error("收到空的确认响应 - 令牌可能已失效或过期")
