@@ -49,9 +49,56 @@ curl -s "http://127.0.0.1:8080/v1/models" \
   -H "Authorization: Bearer your-api-key-here"
 ```
 
+### Docker
+
+Build the image:
+
+```bash
+docker build -t geminiweb2api:latest .
+```
+
+Run with a local `config.json` mounted into the container:
+
+```bash
+docker run -d \
+  --name geminiweb2api \
+  -p 8080:8080 \
+  -v $(pwd)/config.json:/app/config.json \
+  geminiweb2api:latest
+```
+
+Windows PowerShell example:
+
+```powershell
+docker run -d `
+  --name geminiweb2api `
+  -p 8080:8080 `
+  -v ${PWD}\config.json:/app/config.json `
+  geminiweb2api:latest
+```
+
+If you need outbound proxy support inside the container, pass the standard proxy environment variables:
+
+```bash
+docker run -d \
+  --name geminiweb2api \
+  -p 8080:8080 \
+  -v $(pwd)/config.json:/app/config.json \
+  -e HTTP_PROXY=http://host.docker.internal:7890 \
+  -e HTTPS_PROXY=http://host.docker.internal:7890 \
+  geminiweb2api:latest
+```
+
+Docker Compose:
+
+```bash
+cp config.json.example config.json
+docker compose up -d --build
+```
+
 ### Configuration
 
-Use `config.json` in the project root:
+Use `config.json` in the project root. You can start from `config.json.example`:
 
 ```json
 {
