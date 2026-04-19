@@ -89,12 +89,29 @@ docker run -d \
   geminiweb2api:latest
 ```
 
+Health check inside the container:
+
+```bash
+curl -s http://127.0.0.1:8080/api/telemetry
+```
+
+The image prefers running as a non-root user and includes a Docker `HEALTHCHECK` based on `/api/telemetry`.
+
+If the mounted `/app` volume is not writable by the non-root user in your Docker environment, the entrypoint automatically falls back to root so the container can still start instead of crashing on permissions.
+
+Use `GET /healthz` for upstream business health checks. It returns `503` when the service is up but no account is currently healthy.
+
 Docker Compose:
 
 ```bash
 cp config.json.example config.json
 docker compose up -d --build
 ```
+
+Optional environment overrides in `docker compose`:
+
+- `GEMINIWEB2API_API_KEY`
+- `GEMINIWEB2API_PUBLIC_ACCOUNT_STATUS`
 
 ### Configuration
 
