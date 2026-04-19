@@ -2,7 +2,7 @@
   "api_key": "your-api-key-here",
   "token": "",
   "cookies": "",
-  "tokens": null,
+  "tokens": [],
   "proxy": "",
   "gemini_url": "",
   "gemini_home_url": "",
