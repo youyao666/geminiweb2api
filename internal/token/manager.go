@@ -42,35 +42,35 @@ type pageState struct {
 }
 
 type AccountStatus struct {
-	ID                  string    `json:"id"`
-	Email               string    `json:"email"`
-	Enabled             bool      `json:"enabled"`
-	Weight              int       `json:"weight"`
-	StateCode           string    `json:"state_code"`
-	StateLabel          string    `json:"state_label"`
-	ActionRequired      string    `json:"action_required,omitempty"`
-	Retryable           bool      `json:"retryable"`
-	NextRetryAt         time.Time `json:"next_retry_at,omitempty"`
-	TokenReady          bool      `json:"token_ready"`
-	HasProxy           bool      `json:"has_proxy"`
-	UsingCookies        bool      `json:"using_cookies"`
-	HasManualToken      bool      `json:"has_manual_token"`
-	BoundSessions       int       `json:"bound_sessions"`
-	ConsecutiveFailures int       `json:"consecutive_failures"`
-	BackoffUntil        time.Time `json:"backoff_until,omitempty"`
-	LastUsedAt          time.Time `json:"last_used_at,omitempty"`
-	LastError           string    `json:"last_error,omitempty"`
-	LastTokenRefreshAt  time.Time `json:"last_token_refresh_at,omitempty"`
+	ID                  string         `json:"id"`
+	Email               string         `json:"email"`
+	Enabled             bool           `json:"enabled"`
+	Weight              int            `json:"weight"`
+	StateCode           string         `json:"state_code"`
+	StateLabel          string         `json:"state_label"`
+	ActionRequired      string         `json:"action_required,omitempty"`
+	Retryable           bool           `json:"retryable"`
+	NextRetryAt         time.Time      `json:"next_retry_at,omitempty"`
+	TokenReady          bool           `json:"token_ready"`
+	HasProxy            bool           `json:"has_proxy"`
+	UsingCookies        bool           `json:"using_cookies"`
+	HasManualToken      bool           `json:"has_manual_token"`
+	BoundSessions       int            `json:"bound_sessions"`
+	ConsecutiveFailures int            `json:"consecutive_failures"`
+	BackoffUntil        time.Time      `json:"backoff_until,omitempty"`
+	LastUsedAt          time.Time      `json:"last_used_at,omitempty"`
+	LastError           string         `json:"last_error,omitempty"`
+	LastTokenRefreshAt  time.Time      `json:"last_token_refresh_at,omitempty"`
 	RecentFailures      []FailureEvent `json:"recent_failures,omitempty"`
 }
 
 type FailureEvent struct {
-	At     time.Time `json:"at"`
-	Code   string    `json:"code"`
-	Label  string    `json:"label"`
-	Reason string    `json:"reason"`
-	Action string    `json:"action,omitempty"`
-	Retryable bool   `json:"retryable"`
+	At        time.Time `json:"at"`
+	Code      string    `json:"code"`
+	Label     string    `json:"label"`
+	Reason    string    `json:"reason"`
+	Action    string    `json:"action,omitempty"`
+	Retryable bool      `json:"retryable"`
 }
 
 type accountState struct {
@@ -128,9 +128,9 @@ type accountRuntime struct {
 }
 
 type Manager struct {
-	getConfig func() config.Config
-	getClient func() *http.Client
-	getLogger func() *logging.Logger
+	getConfig    func() config.Config
+	getClient    func() *http.Client
+	getLogger    func() *logging.Logger
 	updateConfig func(func(*config.Config) error) error
 
 	mu             sync.RWMutex
@@ -143,13 +143,13 @@ type Manager struct {
 
 func NewManager(getConfig func() config.Config, getClient func() *http.Client, getLogger func() *logging.Logger, updateConfig func(func(*config.Config) error) error) *Manager {
 	m := &Manager{
-		getConfig:       getConfig,
-		getClient:       getClient,
-		getLogger:       getLogger,
-		updateConfig:    updateConfig,
-		accounts:        make(map[string]*accountRuntime),
-		sessionBinding:  make(map[string]*sessionBinding),
-		proxyClients:    make(map[string]*http.Client),
+		getConfig:      getConfig,
+		getClient:      getClient,
+		getLogger:      getLogger,
+		updateConfig:   updateConfig,
+		accounts:       make(map[string]*accountRuntime),
+		sessionBinding: make(map[string]*sessionBinding),
+		proxyClients:   make(map[string]*http.Client),
 	}
 	m.reloadAccountsLocked()
 	return m
