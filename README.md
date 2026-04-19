@@ -134,6 +134,8 @@ Use `config.json` in the project root. You can start from `config.json.example`:
   Explicit proxy such as `http://127.0.0.1:7890`. The app also respects `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`.
 - `models`
   Optional model ID list returned by `GET /v1/models`. If empty, the built-in default Gemini model list is used.
+- `model_aliases`
+  Optional request model alias map. Example: map `gpt-4.1` to `gemini-3-pro` for upstream panels such as NewAPI.
 - `gemini_url`
   Override for the Gemini generation endpoint in reverse-proxy setups.
 - `gemini_home_url`
@@ -383,13 +385,15 @@ Recommended upstream settings in NewAPI:
 - Model discovery: `GET /v1/models`
 - Chat endpoint: `POST /v1/chat/completions`
 - Responses endpoint: `POST /v1/responses`
+- Health check: `GET /healthz`
 
 Notes:
 
 - `GET /v1/models` also requires `Authorization: Bearer <api_key>`.
 - `POST /v1/responses` is supported as a minimal compatibility layer and is internally translated into `/v1/chat/completions` for text input.
-- Streaming is supported with SSE and ends with `data: [DONE]`.
+- Streaming is supported with SSE and ends with `data: [DONE]`. The current implementation streams incremental chunks from the final Gemini content instead of a true token-by-token upstream stream.
 - `stream_options.include_usage` is supported.
+- `model_aliases` can be used to align NewAPI/OpenAI-style model names with Gemini model IDs.
 - Common OpenAI/NewAPI fields such as `max_completion_tokens`, `top_p`, `presence_penalty`, `frequency_penalty`, `response_format`, and `user` are accepted for compatibility. Some are pass-through compatibility fields and may not materially change Gemini Web behavior.
 
 Recommended model names for upstream mapping:

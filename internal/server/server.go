@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,9 @@ type Server struct {
 
 	sessions   map[string]*gemini.GeminiSession
 	sessionsMu sync.RWMutex
+
+	discoveredModelsMu sync.RWMutex
+	discoveredModels   map[string]time.Time
 }
 
 type loggingResponseWriter struct {
@@ -86,9 +90,10 @@ type webLoginRequest struct {
 
 func New(configStore *config.Store) (*Server, error) {
 	s := &Server{
-		configStore: configStore,
-		metrics:     metrics.New(),
-		sessions:    make(map[string]*gemini.GeminiSession),
+		configStore:      configStore,
+		metrics:          metrics.New(),
+		sessions:         make(map[string]*gemini.GeminiSession),
+		discoveredModels: make(map[string]time.Time),
 	}
 
 	if err := s.reloadRuntime(); err != nil {
@@ -117,6 +122,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/web/login", s.loggingMiddleware(s.handleWebLogin))
 	mux.HandleFunc("/api/web/logout", s.loggingMiddleware(s.handleWebLogout))
 	mux.HandleFunc("/api/telemetry", s.handleTelemetry)
+	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/api/session/cookies", s.loggingMiddleware(s.handleUpdateCookies))
 	mux.HandleFunc("/api/accounts", s.loggingMiddleware(s.handleAccounts))
 	mux.HandleFunc("/api/accounts/", s.loggingMiddleware(s.handleAccountAction))
@@ -282,6 +288,14 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	s.writeJSON(w, status, resp)
 }
 
+func (s *Server) writeMappedError(w http.ResponseWriter, err gemini.OpenAIError) {
+	resp := gemini.ErrorResponse{}
+	resp.Error.Message = err.Message
+	resp.Error.Type = err.Type
+	resp.Error.Code = err.Code
+	s.writeJSON(w, err.Status, resp)
+}
+
 func (s *Server) authenticateRequest(r *http.Request) error {
 	auth := r.Header.Get("Authorization")
 	cfg := s.ConfigSnapshot()
@@ -369,6 +383,53 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, _ *http.Request) {
 		"note":             note,
 	}
 	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	stats := s.tokenManager.PoolStats()
+	status := http.StatusOK
+	body := map[string]interface{}{"status": "ok", "healthy_accounts": stats.HealthyAccounts, "enabled_accounts": stats.EnabledAccounts}
+	if stats.HealthyAccounts == 0 {
+		status = http.StatusServiceUnavailable
+		body["status"] = "degraded"
+	}
+	s.writeJSON(w, status, body)
+}
+
+func (s *Server) recordDiscoveredModel(model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	s.discoveredModelsMu.Lock()
+	defer s.discoveredModelsMu.Unlock()
+	s.discoveredModels[model] = time.Now()
+}
+
+func (s *Server) currentModelList() []string {
+	s.discoveredModelsMu.RLock()
+	models := make([]string, 0, len(s.discoveredModels))
+	for model := range s.discoveredModels {
+		models = append(models, model)
+	}
+	s.discoveredModelsMu.RUnlock()
+	if len(models) > 0 {
+		slices.Sort(models)
+		return models
+	}
+	configured := s.ConfigSnapshot().Models
+	if len(configured) > 0 {
+		return configured
+	}
+	return []string{"gemini-3-pro", "gemini-3-flash", "gemini-2.5-pro", "gemini-2.5-flash"}
+}
+
+func (s *Server) normalizeModel(model string) string {
+	model = strings.TrimSpace(model)
+	if alias := s.ConfigSnapshot().ModelAliases[model]; strings.TrimSpace(alias) != "" {
+		return strings.TrimSpace(alias)
+	}
+	return model
 }
 
 func (s *Server) handleUpdateCookies(w http.ResponseWriter, r *http.Request) {
@@ -703,10 +764,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().Unix()
-	modelIDs := s.ConfigSnapshot().Models
-	if len(modelIDs) == 0 {
-		modelIDs = []string{"gemini-3-flash", "gemini-3", "gemini-3-flash-thinking", "gemini-3-flash-plus", "gemini-3-flash-thinking-plus", "gemini-3-flash-advanced", "gemini-3-pro", "gemini-3-pro-advanced", "gemini-3-pro-plus", "gemini-3.1", "gemini-3.1-pro", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2-flash", "gemini-2.0-flash", "gemini-flash", "gemini-pro"}
-	}
+	modelIDs := s.currentModelList()
 	data := make([]gemini.Model, 0, len(modelIDs))
 	for _, id := range modelIDs {
 		data = append(data, gemini.Model{ID: id, Object: "model", Created: now, OwnedBy: "google"})
@@ -737,7 +795,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "input 不能为空")
 		return
 	}
-	chatReq := gemini.ChatCompletionRequest{Model: req.Model, Stream: false, Messages: []gemini.Message{{Role: "user", Content: inputText}}}
+	chatReq := gemini.ChatCompletionRequest{Model: s.normalizeModel(req.Model), Stream: false, Messages: []gemini.Message{{Role: "user", Content: inputText}}}
 	body, _ := json.Marshal(chatReq)
 	proxyReq := r.Clone(r.Context())
 	proxyReq.Body = io.NopCloser(strings.NewReader(string(body)))
@@ -760,7 +818,9 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadGateway, "无法解析 chat completion 响应")
 		return
 	}
-	resp := gemini.ResponsesResponse{ID: chatResp.ID, Object: "response", CreatedAt: chatResp.Created, Model: chatResp.Model}
+	resolvedModel := s.normalizeModel(req.Model)
+	s.recordDiscoveredModel(resolvedModel)
+	resp := gemini.ResponsesResponse{ID: chatResp.ID, Object: "response", CreatedAt: chatResp.Created, Model: resolvedModel}
 	if len(chatResp.Choices) > 0 && chatResp.Choices[0].Message != nil {
 		item := struct {
 			Type    string `json:"type"`
@@ -822,6 +882,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.Model = s.normalizeModel(req.Model)
 	s.Logger().Info("对话请求: 模型=%s, 消息数=%d, 流式=%v", req.Model, len(req.Messages), req.Stream)
 	if req.MaxCompletionTokens > 0 && req.MaxTokens == 0 {
 		req.MaxTokens = req.MaxCompletionTokens
@@ -860,12 +921,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	if req.Stream {
 		s.Logger().Debug("开始流式响应")
-		gemini.HandleStreamResponse(w, prompt, req.Model, session, req.Tools, sessionKey, snlm0eToken, req.StreamOptions, s.writeError)
+		s.recordDiscoveredModel(req.Model)
+		gemini.HandleStreamResponse(w, prompt, req.Model, session, req.Tools, sessionKey, snlm0eToken, req.StreamOptions, s.writeError, s.writeMappedError)
 		s.savePersistentState()
 		return
 	}
 
 	s.Logger().Debug("开始非流式响应")
-	gemini.HandleNonStreamResponse(w, prompt, req.Model, session, req.Tools, sessionKey, snlm0eToken, s.writeError, s.writeJSON)
+	s.recordDiscoveredModel(req.Model)
+	gemini.HandleNonStreamResponse(w, prompt, req.Model, session, req.Tools, sessionKey, snlm0eToken, s.writeError, s.writeMappedError, s.writeJSON)
 	s.savePersistentState()
 }

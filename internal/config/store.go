@@ -15,20 +15,21 @@ const (
 )
 
 type Config struct {
-	APIKey              string    `json:"api_key"`
-	Token               string    `json:"token"`
-	Cookies             string    `json:"cookies"`
-	Tokens              []string  `json:"tokens"`
-	Accounts            []Account `json:"accounts"`
-	Proxy               string    `json:"proxy"`
-	Models              []string  `json:"models"`
-	GeminiURL           string    `json:"gemini_url"`
-	GeminiHomeURL       string    `json:"gemini_home_url"`
-	Port                int       `json:"port"`
-	LogFile             string    `json:"log_file"`
-	LogLevel            string    `json:"log_level"`
-	PublicAccountStatus bool      `json:"public_account_status"`
-	Note                []string  `json:"note"`
+	APIKey              string            `json:"api_key"`
+	Token               string            `json:"token"`
+	Cookies             string            `json:"cookies"`
+	Tokens              []string          `json:"tokens"`
+	Accounts            []Account         `json:"accounts"`
+	Proxy               string            `json:"proxy"`
+	Models              []string          `json:"models"`
+	ModelAliases        map[string]string `json:"model_aliases"`
+	GeminiURL           string            `json:"gemini_url"`
+	GeminiHomeURL       string            `json:"gemini_home_url"`
+	Port                int               `json:"port"`
+	LogFile             string            `json:"log_file"`
+	LogLevel            string            `json:"log_level"`
+	PublicAccountStatus bool              `json:"public_account_status"`
+	Note                []string          `json:"note"`
 }
 
 type Account struct {

@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -210,6 +211,13 @@ type ErrorResponse struct {
 		Type    string `json:"type"`
 		Code    string `json:"code,omitempty"`
 	} `json:"error"`
+}
+
+type OpenAIError struct {
+	Status  int
+	Type    string
+	Code    string
+	Message string
 }
 
 type AccountContext struct {
@@ -615,10 +623,11 @@ func buildGeminiRequestURL(rawURL string, accountCtx AccountContext) (string, er
 	return parsedURL.String(), nil
 }
 
-func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, streamOptions *StreamOptions, writeError func(http.ResponseWriter, int, string)) {
+func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, streamOptions *StreamOptions, writeError func(http.ResponseWriter, int, string), writeMappedError func(http.ResponseWriter, OpenAIError)) {
 	start := time.Now()
 	const maxRetries = 3
 	var bodyStr, content, lastErr string
+	var lastMappedErr *OpenAIError
 	var accountID string
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -630,6 +639,8 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 		selected, err := depTokens.SelectAccountForSession(sessionKey, attempt > 1)
 		if err != nil {
 			lastErr = err.Error()
+			mapped := OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "no_healthy_accounts", Message: err.Error()}
+			lastMappedErr = &mapped
 			continue
 		}
 		accountID = selected.ID
@@ -649,6 +660,8 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 			depGetLogger().Error("构建 Gemini 请求失败: %v", err)
 			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
+			mapped := OpenAIError{Status: http.StatusBadRequest, Type: "invalid_request_error", Code: "request_build_failed", Message: err.Error()}
+			lastMappedErr = &mapped
 			continue
 		}
 
@@ -662,6 +675,8 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 			}
 			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
+			mapped := OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "upstream_connection_error", Message: err.Error()}
+			lastMappedErr = &mapped
 			continue
 		}
 
@@ -675,20 +690,22 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 				depGetLogger().Warn("检测到 HTML 错误响应，已标记会话令牌失效")
 				depTokens.MarkSessionTokenBad(sessionKey)
 			}
-			depTokens.MarkAccountFailure(accountID, fmt.Sprintf("Gemini API error: %d", resp.StatusCode))
-			lastErr = fmt.Sprintf("Gemini API error: %d", resp.StatusCode)
+			mapped := mapGeminiError(resp.StatusCode, bodyStr)
+			depTokens.MarkAccountFailure(accountID, mapped.Message)
+			lastErr = mapped.Message
+			lastMappedErr = &mapped
 			continue
 		}
 
-		body, err := readResponseBody(resp, "流式")
+		streamedBody, streamedContent, err := streamGeminiResponse(w, resp, model, session, tools, streamOptions)
 		if err != nil {
 			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
+			mapped := OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "stream_read_error", Message: err.Error()}
+			lastMappedErr = &mapped
 			continue
 		}
-
-		depGetLogger().Debug("流式响应体大小: %d 字节", len(body))
-		bodyStr = string(body)
+		bodyStr = streamedBody
 		noteGeminiResponseErrors(bodyStr, sessionKey, "流式")
 
 		if isHTMLErrorResponse(bodyStr) {
@@ -696,17 +713,20 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 			depTokens.MarkSessionTokenBad(sessionKey)
 			depTokens.MarkAccountFailure(accountID, "Request failed due to token issue")
 			lastErr = "Request failed due to token issue"
+			mapped := OpenAIError{Status: http.StatusUnauthorized, Type: "authentication_error", Code: "token_invalid", Message: lastErr}
+			lastMappedErr = &mapped
 			continue
 		}
 
-		content = extractFinalContent(bodyStr)
-		content = filterContent(content)
+		content = streamedContent
 
 		if content == "" {
 			if code, msg := parseGeminiErrorCode(bodyStr); code != 0 {
 				depGetLogger().Error("流式响应无正文，错误码 %d: %s", code, msg)
-				depTokens.MarkAccountFailure(accountID, fmt.Sprintf("Gemini error %d: %s", code, msg))
-				lastErr = fmt.Sprintf("Gemini error %d: %s", code, msg)
+				mapped := mapGeminiError(http.StatusBadGateway, bodyStr)
+				depTokens.MarkAccountFailure(accountID, mapped.Message)
+				lastErr = mapped.Message
+				lastMappedErr = &mapped
 				continue
 			}
 			if isEmptyAcknowledgmentResponse(bodyStr) {
@@ -714,6 +734,8 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 				depTokens.MarkSessionTokenBad(sessionKey)
 				depTokens.MarkAccountFailure(accountID, "Gemini returned empty response - token issue")
 				lastErr = "Gemini returned empty response - token issue"
+				mapped := OpenAIError{Status: http.StatusUnauthorized, Type: "authentication_error", Code: "empty_acknowledgment", Message: lastErr}
+				lastMappedErr = &mapped
 				continue
 			}
 		}
@@ -726,49 +748,17 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 	if lastErr != "" {
 		depGetLogger().Error("所有 %d 次重试均失败，最后一次错误: %s", maxRetries, lastErr)
 		depMetrics.AddRequest(false, len(prompt)/4, 0)
+		if lastMappedErr != nil {
+			writeMappedError(w, *lastMappedErr)
+			return
+		}
 		writeError(w, http.StatusBadGateway, lastErr)
 		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
-		return
-	}
-
-	updateSessionFromResponse(session, bodyStr)
-	sessionSnapshot := session.Snapshot()
-	sendStreamChunkWithConversation(w, flusher, model, "", "assistant", false, sessionSnapshot.ConversationID)
-
-	if content != "" {
-		depGetLogger().Debug("已提取流式内容 (长度=%d): %.100s", len(content), content)
-		cleanContent, toolCalls := parseToolCalls(content, tools)
-		cleanContent = filterContent(cleanContent)
-		if len(toolCalls) > 0 {
-			sendStreamChunkWithTools(w, flusher, model, cleanContent, toolCalls)
-		} else {
-			sendStreamChunk(w, flusher, model, cleanContent, "", false)
-		}
 	}
 
 	inputTokens := len(prompt) / 4
 	outputTokens := len(content) / 4
 	depMetrics.AddRequest(true, inputTokens, outputTokens)
-	_, toolCalls := parseToolCalls(content, tools)
-	if len(toolCalls) > 0 {
-		sendStreamChunkFinish(w, flusher, model, "tool_calls")
-	} else {
-		sendStreamChunk(w, flusher, model, "", "", true)
-	}
-	if streamOptions != nil && streamOptions.IncludeUsage {
-		sendStreamUsageChunk(w, flusher, model, inferStreamUsage(prompt, content))
-	}
-	w.Write([]byte("data: [DONE]\n\n"))
-	flusher.Flush()
 	depGetLogger().Info("流式响应完成，耗时 %.3fms", float64(time.Since(start).Microseconds())/1000)
 }
 
@@ -869,10 +859,11 @@ func sendStreamChunkFinish(w http.ResponseWriter, flusher http.Flusher, model st
 	flusher.Flush()
 }
 
-func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, writeError func(http.ResponseWriter, int, string), writeJSON func(http.ResponseWriter, int, interface{})) {
+func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, writeError func(http.ResponseWriter, int, string), writeMappedError func(http.ResponseWriter, OpenAIError), writeJSON func(http.ResponseWriter, int, interface{})) {
 	start := time.Now()
 	const maxRetries = 3
 	var bodyStr, content, lastErr string
+	var lastMappedErr *OpenAIError
 	var accountID string
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -884,6 +875,8 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		selected, err := depTokens.SelectAccountForSession(sessionKey, attempt > 1)
 		if err != nil {
 			lastErr = err.Error()
+			mapped := OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "no_healthy_accounts", Message: err.Error()}
+			lastMappedErr = &mapped
 			continue
 		}
 		accountID = selected.ID
@@ -903,6 +896,8 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 			depGetLogger().Error("构建 Gemini 请求失败: %v", err)
 			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
+			mapped := OpenAIError{Status: http.StatusBadRequest, Type: "invalid_request_error", Code: "request_build_failed", Message: err.Error()}
+			lastMappedErr = &mapped
 			continue
 		}
 
@@ -916,6 +911,8 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 			}
 			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
+			mapped := OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "upstream_connection_error", Message: err.Error()}
+			lastMappedErr = &mapped
 			continue
 		}
 
@@ -923,6 +920,8 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		if err != nil {
 			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
+			mapped := OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "response_read_error", Message: err.Error()}
+			lastMappedErr = &mapped
 			continue
 		}
 		depGetLogger().Debug("Gemini API 响应状态码: %d", resp.StatusCode)
@@ -936,8 +935,10 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 				depGetLogger().Warn("检测到 HTML 错误响应，已标记会话令牌失效")
 				depTokens.MarkSessionTokenBad(sessionKey)
 			}
-			depTokens.MarkAccountFailure(accountID, fmt.Sprintf("Gemini API error: %d", resp.StatusCode))
-			lastErr = fmt.Sprintf("Gemini API error: %d", resp.StatusCode)
+			mapped := mapGeminiError(resp.StatusCode, bodyStr)
+			depTokens.MarkAccountFailure(accountID, mapped.Message)
+			lastErr = mapped.Message
+			lastMappedErr = &mapped
 			continue
 		}
 
@@ -946,6 +947,8 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 			depTokens.MarkSessionTokenBad(sessionKey)
 			depTokens.MarkAccountFailure(accountID, "Request failed due to token issue")
 			lastErr = "Request failed due to token issue"
+			mapped := OpenAIError{Status: http.StatusUnauthorized, Type: "authentication_error", Code: "token_invalid", Message: lastErr}
+			lastMappedErr = &mapped
 			continue
 		}
 
@@ -955,8 +958,10 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		if content == "" {
 			if code, msg := parseGeminiErrorCode(bodyStr); code != 0 {
 				depGetLogger().Error("非流式响应无正文，错误码 %d: %s", code, msg)
-				depTokens.MarkAccountFailure(accountID, fmt.Sprintf("Gemini error %d: %s", code, msg))
-				lastErr = fmt.Sprintf("Gemini error %d: %s", code, msg)
+				mapped := mapGeminiError(http.StatusBadGateway, bodyStr)
+				depTokens.MarkAccountFailure(accountID, mapped.Message)
+				lastErr = mapped.Message
+				lastMappedErr = &mapped
 				continue
 			}
 			depGetLogger().Warn("从响应中提取的内容为空，响应体预览: %.500s", bodyStr)
@@ -965,6 +970,8 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 				depTokens.MarkSessionTokenBad(sessionKey)
 				depTokens.MarkAccountFailure(accountID, "Gemini returned empty response - token issue")
 				lastErr = "Gemini returned empty response - token issue"
+				mapped := OpenAIError{Status: http.StatusUnauthorized, Type: "authentication_error", Code: "empty_acknowledgment", Message: lastErr}
+				lastMappedErr = &mapped
 				continue
 			}
 		}
@@ -977,6 +984,10 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 	if lastErr != "" {
 		depGetLogger().Error("所有 %d 次重试均失败，最后一次错误: %s", maxRetries, lastErr)
 		depMetrics.AddRequest(false, len(prompt)/4, 0)
+		if lastMappedErr != nil {
+			writeMappedError(w, *lastMappedErr)
+			return
+		}
 		writeError(w, http.StatusBadGateway, lastErr)
 		return
 	}
@@ -1395,6 +1406,99 @@ func isHTMLErrorResponse(body string) bool {
 		}
 	}
 	return false
+}
+
+func mapGeminiError(statusCode int, body string) OpenAIError {
+	if isHTMLErrorResponse(body) {
+		return OpenAIError{Status: http.StatusBadGateway, Type: "invalid_request_error", Code: "upstream_html_error", Message: "Gemini returned login, consent, or protection page"}
+	}
+	if code, msg := parseGeminiErrorCode(body); code != 0 {
+		switch code {
+		case 2, 7, 1037:
+			return OpenAIError{Status: http.StatusTooManyRequests, Type: "rate_limit_error", Code: msg, Message: fmt.Sprintf("Gemini error %d: %s", code, msg)}
+		case 4, 1016:
+			return OpenAIError{Status: http.StatusUnauthorized, Type: "authentication_error", Code: msg, Message: fmt.Sprintf("Gemini error %d: %s", code, msg)}
+		case 8:
+			return OpenAIError{Status: http.StatusBadRequest, Type: "invalid_request_error", Code: msg, Message: fmt.Sprintf("Gemini error %d: %s", code, msg)}
+		default:
+			return OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: msg, Message: fmt.Sprintf("Gemini error %d: %s", code, msg)}
+		}
+	}
+	if statusCode == http.StatusUnauthorized {
+		return OpenAIError{Status: http.StatusUnauthorized, Type: "authentication_error", Code: "unauthorized", Message: "Gemini unauthorized"}
+	}
+	if statusCode == http.StatusForbidden {
+		return OpenAIError{Status: http.StatusForbidden, Type: "permission_error", Code: "forbidden", Message: "Gemini forbidden"}
+	}
+	if statusCode == http.StatusTooManyRequests {
+		return OpenAIError{Status: http.StatusTooManyRequests, Type: "rate_limit_error", Code: "rate_limit_exceeded", Message: "Gemini rate limited the request"}
+	}
+	return OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "bad_gateway", Message: fmt.Sprintf("Gemini API error: %d", statusCode)}
+}
+
+func streamGeminiResponse(w http.ResponseWriter, resp *http.Response, model string, session *GeminiSession, tools []Tool, streamOptions *StreamOptions) (string, string, error) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return "", "", fmt.Errorf("streaming not supported")
+	}
+	body, err := readResponseBody(resp, "流式")
+	if err != nil {
+		return "", "", err
+	}
+	bodyStr := string(body)
+	updateSessionFromResponse(session, bodyStr)
+	sessionSnapshot := session.Snapshot()
+	sendStreamChunkWithConversation(w, flusher, model, "", "assistant", false, sessionSnapshot.ConversationID)
+	content := filterContent(extractFinalContent(bodyStr))
+	if content != "" {
+		cleanContent, toolCalls := parseToolCalls(content, tools)
+		cleanContent = filterContent(cleanContent)
+		for _, part := range chunkText(cleanContent, 48) {
+			if len(toolCalls) > 0 && part == cleanContent {
+				sendStreamChunkWithTools(w, flusher, model, part, toolCalls)
+			} else {
+				sendStreamChunk(w, flusher, model, part, "", false)
+			}
+		}
+	}
+	_, toolCalls := parseToolCalls(content, tools)
+	if len(toolCalls) > 0 {
+		sendStreamChunkFinish(w, flusher, model, "tool_calls")
+	} else {
+		sendStreamChunk(w, flusher, model, "", "", true)
+	}
+	if streamOptions != nil && streamOptions.IncludeUsage {
+		sendStreamUsageChunk(w, flusher, model, inferStreamUsage("", content))
+	}
+	_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	flusher.Flush()
+	return bodyStr, content, nil
+}
+
+func chunkText(content string, size int) []string {
+	if size <= 0 || len(content) <= size {
+		return []string{content}
+	}
+	chunks := make([]string, 0, (len(content)/size)+1)
+	reader := bufio.NewReader(strings.NewReader(content))
+	for {
+		buf := make([]rune, 0, size)
+		for len(buf) < size {
+			r, _, err := reader.ReadRune()
+			if err != nil {
+				break
+			}
+			buf = append(buf, r)
+		}
+		if len(buf) == 0 {
+			break
+		}
+		chunks = append(chunks, string(buf))
+	}
+	return chunks
 }
 
 func checkGeminiError(body string) (bool, string) {

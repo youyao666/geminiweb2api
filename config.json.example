@@ -29,6 +29,10 @@
     "gemini-3-pro",
     "gemini-2.5-flash"
   ],
+  "model_aliases": {
+    "gpt-4.1": "gemini-3-pro",
+    "gpt-4o-mini": "gemini-3-flash"
+  },
   "gemini_url": "",
   "gemini_home_url": "",
   "port": 8080,
