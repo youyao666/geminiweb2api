@@ -85,14 +85,27 @@ func (s *GeminiSession) SetConversationID(conversationID string) {
 }
 
 type ChatCompletionRequest struct {
-	Model          string    `json:"model"`
-	Messages       []Message `json:"messages"`
-	Stream         bool      `json:"stream"`
-	Tools          []Tool    `json:"tools,omitempty"`
-	ToolChoice     any       `json:"tool_choice,omitempty"`
-	Temperature    float64   `json:"temperature,omitempty"`
-	MaxTokens      int       `json:"max_tokens,omitempty"`
-	ConversationID string    `json:"conversation_id,omitempty"`
+	Model               string         `json:"model"`
+	Messages            []Message      `json:"messages"`
+	Stream              bool           `json:"stream"`
+	Tools               []Tool         `json:"tools,omitempty"`
+	ToolChoice          any            `json:"tool_choice,omitempty"`
+	Temperature         float64        `json:"temperature,omitempty"`
+	MaxTokens           int            `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int            `json:"max_completion_tokens,omitempty"`
+	ConversationID      string         `json:"conversation_id,omitempty"`
+	N                   int            `json:"n,omitempty"`
+	Stop                interface{}    `json:"stop,omitempty"`
+	TopP                float64        `json:"top_p,omitempty"`
+	PresencePenalty     float64        `json:"presence_penalty,omitempty"`
+	FrequencyPenalty    float64        `json:"frequency_penalty,omitempty"`
+	ResponseFormat      map[string]any `json:"response_format,omitempty"`
+	User                string         `json:"user,omitempty"`
+	StreamOptions       *StreamOptions `json:"stream_options,omitempty"`
+}
+
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 type Tool struct {
@@ -170,11 +183,59 @@ type Model struct {
 	OwnedBy string `json:"owned_by"`
 }
 
+type ResponsesRequest struct {
+	Model  string      `json:"model"`
+	Input  interface{} `json:"input"`
+	Stream bool        `json:"stream,omitempty"`
+}
+
+type ResponsesResponse struct {
+	ID        string `json:"id"`
+	Object    string `json:"object"`
+	CreatedAt int64  `json:"created_at"`
+	Model     string `json:"model"`
+	Output    []struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"output"`
+}
+
 type ErrorResponse struct {
 	Error struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
+		Code    string `json:"code,omitempty"`
 	} `json:"error"`
+}
+
+type AccountContext struct {
+	ID      string
+	Email   string
+	Cookies string
+	Proxy   string
+	Token   string
+	BLToken string
+	FSID    string
+	ReqID   string
+}
+
+var accountHTTPClients sync.Map
+
+func httpClientForAccount(accountCtx AccountContext) *http.Client {
+	proxyValue := strings.TrimSpace(accountCtx.Proxy)
+	if proxyValue == "" {
+		return depGetHTTPClient()
+	}
+	if client, ok := accountHTTPClients.Load(proxyValue); ok {
+		return client.(*http.Client)
+	}
+	client, _, _ := httpclient.NewWithProxy(depGetConfig(), proxyValue, depGetLogger())
+	actual, _ := accountHTTPClients.LoadOrStore(proxyValue, client)
+	return actual.(*http.Client)
 }
 
 var errorCodeMap = map[int]string{
@@ -425,8 +486,7 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 	return strings.TrimSpace(cleanContent), toolCalls
 }
 
-func buildGeminiRequest(prompt string, session *GeminiSession, modelName string, snlm0eToken string) (*http.Request, error) {
-	depTokens.RefreshTokenIfNeeded()
+func buildGeminiRequest(prompt string, session *GeminiSession, modelName string, accountCtx AccountContext) (*http.Request, error) {
 
 	uuidVal := strings.ToUpper(support.GenerateUUIDv4())
 	spec := modelSpecMap["gemini-3-flash"]
@@ -444,7 +504,7 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 		depGetLogger().Debug("正在开始新对话")
 	}
 
-	currentToken := snlm0eToken
+	currentToken := accountCtx.Token
 	if currentToken == "" {
 		currentToken = depTokens.GetToken()
 	}
@@ -477,7 +537,7 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	data.Set("at", currentToken)
 	data.Set("f.req", freqData)
 	endpoints := httpclient.CurrentGeminiEndpoints(depGetConfig())
-	requestURL, err := buildGeminiRequestURL(endpoints.URL)
+	requestURL, err := buildGeminiRequestURL(endpoints.URL, accountCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -491,7 +551,9 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 	req.Header.Set("accept-language", "zh-CN")
-	if cfg := depGetConfig(); cfg.Cookies != "" {
+	if accountCtx.Cookies != "" {
+		req.Header.Set("Cookie", accountCtx.Cookies)
+	} else if cfg := depGetConfig(); cfg.Cookies != "" {
 		req.Header.Set("Cookie", cfg.Cookies)
 	}
 	req.Header.Set("cache-control", "no-cache")
@@ -525,7 +587,7 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	return req, nil
 }
 
-func buildGeminiRequestURL(rawURL string) (string, error) {
+func buildGeminiRequestURL(rawURL string, accountCtx AccountContext) (string, error) {
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
 		return "", err
@@ -539,47 +601,66 @@ func buildGeminiRequestURL(rawURL string) (string, error) {
 		query.Set("rt", "c")
 	}
 	if query.Get("bl") == "" {
-		if blToken := depTokens.GetBLToken(); blToken != "" {
+		if blToken := firstNonEmpty(accountCtx.BLToken, depTokens.GetBLToken()); blToken != "" {
 			query.Set("bl", blToken)
 		}
 	}
 	if query.Get("f.sid") == "" {
-		if fsid := depTokens.GetFSID(); fsid != "" {
+		if fsid := firstNonEmpty(accountCtx.FSID, depTokens.GetFSID()); fsid != "" {
 			query.Set("f.sid", fsid)
 		}
 	}
-	query.Set("_reqid", depTokens.NextReqID())
+	query.Set("_reqid", firstNonEmpty(accountCtx.ReqID, depTokens.NextReqID()))
 	parsedURL.RawQuery = query.Encode()
 	return parsedURL.String(), nil
 }
 
-func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, writeError func(http.ResponseWriter, int, string)) {
+func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, streamOptions *StreamOptions, writeError func(http.ResponseWriter, int, string)) {
 	start := time.Now()
 	const maxRetries = 3
 	var bodyStr, content, lastErr string
+	var accountID string
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
 			depGetLogger().Info("流式请求正在进行第 %d/%d 次重试", attempt, maxRetries)
-			snlm0eToken, _ = depTokens.GetTokenForSession(sessionKey, true)
 			time.Sleep(time.Duration(attempt*500) * time.Millisecond)
 		}
 
-		req, err := buildGeminiRequest(prompt, session, model, snlm0eToken)
+		selected, err := depTokens.SelectAccountForSession(sessionKey, attempt > 1)
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		accountID = selected.ID
+		accountCtx := AccountContext{
+			ID:      selected.ID,
+			Email:   selected.Email,
+			Cookies: selected.Cookies,
+			Proxy:   selected.Proxy,
+			Token:   firstNonEmpty(selected.Token, snlm0eToken),
+			BLToken: selected.BLToken,
+			FSID:    selected.FSID,
+			ReqID:   selected.ReqID,
+		}
+
+		req, err := buildGeminiRequest(prompt, session, model, accountCtx)
 		if err != nil {
 			depGetLogger().Error("构建 Gemini 请求失败: %v", err)
+			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
 			continue
 		}
 
 		depGetLogger().Debug("正在发送请求到 Gemini API...")
-		resp, err := depGetHTTPClient().Do(req)
+		resp, err := httpClientForAccount(accountCtx).Do(req)
 		if err != nil {
 			if httpclient.IsConnectionError(err) {
 				depGetLogger().Warn("通过代理连接出错 (尝试 %d/%d): %v", attempt, maxRetries, err)
 			} else {
 				depGetLogger().Error("Gemini API 请求失败: %v", err)
 			}
+			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
 			continue
 		}
@@ -594,12 +675,14 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 				depGetLogger().Warn("检测到 HTML 错误响应，已标记会话令牌失效")
 				depTokens.MarkSessionTokenBad(sessionKey)
 			}
+			depTokens.MarkAccountFailure(accountID, fmt.Sprintf("Gemini API error: %d", resp.StatusCode))
 			lastErr = fmt.Sprintf("Gemini API error: %d", resp.StatusCode)
 			continue
 		}
 
 		body, err := readResponseBody(resp, "流式")
 		if err != nil {
+			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
 			continue
 		}
@@ -611,6 +694,7 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 		if isHTMLErrorResponse(bodyStr) {
 			depGetLogger().Warn("响应体中检测到 HTML 错误，已标记会话令牌失效")
 			depTokens.MarkSessionTokenBad(sessionKey)
+			depTokens.MarkAccountFailure(accountID, "Request failed due to token issue")
 			lastErr = "Request failed due to token issue"
 			continue
 		}
@@ -621,17 +705,20 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 		if content == "" {
 			if code, msg := parseGeminiErrorCode(bodyStr); code != 0 {
 				depGetLogger().Error("流式响应无正文，错误码 %d: %s", code, msg)
+				depTokens.MarkAccountFailure(accountID, fmt.Sprintf("Gemini error %d: %s", code, msg))
 				lastErr = fmt.Sprintf("Gemini error %d: %s", code, msg)
 				continue
 			}
 			if isEmptyAcknowledgmentResponse(bodyStr) {
 				depGetLogger().Error("流式响应收到空的确认包 - 令牌可能已失效或过期")
 				depTokens.MarkSessionTokenBad(sessionKey)
+				depTokens.MarkAccountFailure(accountID, "Gemini returned empty response - token issue")
 				lastErr = "Gemini returned empty response - token issue"
 				continue
 			}
 		}
 
+		depTokens.MarkAccountSuccess(accountID)
 		lastErr = ""
 		break
 	}
@@ -677,9 +764,36 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 	} else {
 		sendStreamChunk(w, flusher, model, "", "", true)
 	}
+	if streamOptions != nil && streamOptions.IncludeUsage {
+		sendStreamUsageChunk(w, flusher, model, inferStreamUsage(prompt, content))
+	}
 	w.Write([]byte("data: [DONE]\n\n"))
 	flusher.Flush()
 	depGetLogger().Info("流式响应完成，耗时 %.3fms", float64(time.Since(start).Microseconds())/1000)
+}
+
+func sendStreamUsageChunk(w http.ResponseWriter, flusher http.Flusher, model string, usage Usage) {
+	chunk := ChatCompletionResponse{
+		ID:      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
+		Object:  "chat.completion.chunk",
+		Created: time.Now().Unix(),
+		Model:   model,
+		Choices: []Choice{},
+		Usage:   usage,
+	}
+	jsonData, _ := json.Marshal(chunk)
+	w.Write([]byte(fmt.Sprintf("data: %s\n\n", jsonData)))
+	flusher.Flush()
+}
+
+func inferStreamUsage(prompt string, content string) Usage {
+	inputTokens := len(prompt) / 4
+	outputTokens := len(content) / 4
+	return Usage{
+		PromptTokens:     inputTokens,
+		CompletionTokens: outputTokens,
+		TotalTokens:      inputTokens + outputTokens,
+	}
 }
 
 func sendStreamChunk(w http.ResponseWriter, flusher http.Flusher, model string, content string, role string, isFinish bool) {
@@ -759,35 +873,55 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 	start := time.Now()
 	const maxRetries = 3
 	var bodyStr, content, lastErr string
+	var accountID string
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
 			depGetLogger().Info("非流式请求正在进行第 %d/%d 次重试", attempt, maxRetries)
-			snlm0eToken, _ = depTokens.GetTokenForSession(sessionKey, true)
 			time.Sleep(time.Duration(attempt*500) * time.Millisecond)
 		}
 
-		req, err := buildGeminiRequest(prompt, session, model, snlm0eToken)
+		selected, err := depTokens.SelectAccountForSession(sessionKey, attempt > 1)
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		accountID = selected.ID
+		accountCtx := AccountContext{
+			ID:      selected.ID,
+			Email:   selected.Email,
+			Cookies: selected.Cookies,
+			Proxy:   selected.Proxy,
+			Token:   firstNonEmpty(selected.Token, snlm0eToken),
+			BLToken: selected.BLToken,
+			FSID:    selected.FSID,
+			ReqID:   selected.ReqID,
+		}
+
+		req, err := buildGeminiRequest(prompt, session, model, accountCtx)
 		if err != nil {
 			depGetLogger().Error("构建 Gemini 请求失败: %v", err)
+			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
 			continue
 		}
 
 		depGetLogger().Debug("正在发送请求到 Gemini API...")
-		resp, err := depGetHTTPClient().Do(req)
+		resp, err := httpClientForAccount(accountCtx).Do(req)
 		if err != nil {
 			if httpclient.IsConnectionError(err) {
 				depGetLogger().Warn("通过代理连接出错 (尝试 %d/%d): %v", attempt, maxRetries, err)
 			} else {
 				depGetLogger().Error("Gemini API 请求失败: %v", err)
 			}
+			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
 			continue
 		}
 
 		body, err := readResponseBody(resp, "非流式")
 		if err != nil {
+			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
 			continue
 		}
@@ -802,6 +936,7 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 				depGetLogger().Warn("检测到 HTML 错误响应，已标记会话令牌失效")
 				depTokens.MarkSessionTokenBad(sessionKey)
 			}
+			depTokens.MarkAccountFailure(accountID, fmt.Sprintf("Gemini API error: %d", resp.StatusCode))
 			lastErr = fmt.Sprintf("Gemini API error: %d", resp.StatusCode)
 			continue
 		}
@@ -809,6 +944,7 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		if isHTMLErrorResponse(bodyStr) {
 			depGetLogger().Warn("响应体中检测到 HTML 错误，已标记会话令牌失效")
 			depTokens.MarkSessionTokenBad(sessionKey)
+			depTokens.MarkAccountFailure(accountID, "Request failed due to token issue")
 			lastErr = "Request failed due to token issue"
 			continue
 		}
@@ -819,6 +955,7 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		if content == "" {
 			if code, msg := parseGeminiErrorCode(bodyStr); code != 0 {
 				depGetLogger().Error("非流式响应无正文，错误码 %d: %s", code, msg)
+				depTokens.MarkAccountFailure(accountID, fmt.Sprintf("Gemini error %d: %s", code, msg))
 				lastErr = fmt.Sprintf("Gemini error %d: %s", code, msg)
 				continue
 			}
@@ -826,11 +963,13 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 			if isEmptyAcknowledgmentResponse(bodyStr) {
 				depGetLogger().Error("收到空的确认响应 - 令牌可能已失效或过期")
 				depTokens.MarkSessionTokenBad(sessionKey)
+				depTokens.MarkAccountFailure(accountID, "Gemini returned empty response - token issue")
 				lastErr = "Gemini returned empty response - token issue"
 				continue
 			}
 		}
 
+		depTokens.MarkAccountSuccess(accountID)
 		lastErr = ""
 		break
 	}
@@ -883,6 +1022,15 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func updateSessionFromResponse(session *GeminiSession, body string) {

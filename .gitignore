@@ -4,6 +4,7 @@ main.zip
 
 # Local config
 config.json
+state.json
 
 # Temporary/test files
 test.txt
