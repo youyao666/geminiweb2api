@@ -480,70 +480,156 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 		return content, nil
 	}
 
-	var toolCalls []ToolCall
-	cleanContent := content
-	re1 := regexp.MustCompile(`(?s)\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})\s*\}`)
-	matches1 := re1.FindAllStringSubmatch(content, -1)
-	for i, match := range matches1 {
-		name := match[1]
-		args := match[2]
-		for _, t := range tools {
-			if t.Function.Name == name {
-				toolCalls = append(toolCalls, ToolCall{
-					ID:   fmt.Sprintf("call_%s_%d", support.GenerateRandomHex(8), i),
-					Type: "function",
-					Function: FunctionCall{
-						Name:      name,
-						Arguments: args,
-					},
-				})
-				cleanContent = strings.Replace(cleanContent, match[0], "", 1)
-				break
-			}
-		}
+	allowed := make(map[string]struct{}, len(tools))
+	for _, t := range tools {
+		allowed[t.Function.Name] = struct{}{}
 	}
 
-	if len(toolCalls) > 0 {
-		return strings.TrimSpace(cleanContent), toolCalls
-	}
+	clean := content
+	toolCalls := make([]ToolCall, 0)
+	seen := make(map[string]struct{})
 
-	re2 := regexp.MustCompile("(?s)```tool_call\\s*\\n?(\\{.*?\\})\\s*```")
-	matches2 := re2.FindAllStringSubmatch(content, -1)
-	for i, match := range matches2 {
-		var tc struct {
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
+	addCall := func(name, args, rawBlock string) {
+		if _, ok := allowed[name]; !ok {
+			return
 		}
-
-		jsonStr := match[1]
-		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
-			depGetLogger().Debug("解析工具调用失败: %v", err)
-			continue
+		key := name + "\n" + args
+		if _, ok := seen[key]; ok {
+			return
 		}
-		toolExists := false
-		for _, t := range tools {
-			if t.Function.Name == tc.Name {
-				toolExists = true
-				break
-			}
-		}
-		if !toolExists {
-			continue
-		}
-
-		toolCall := ToolCall{
-			ID:   fmt.Sprintf("call_%s_%d", support.GenerateRandomHex(8), i),
+		seen[key] = struct{}{}
+		toolCalls = append(toolCalls, ToolCall{
+			ID:   fmt.Sprintf("call_%s_%d", support.GenerateRandomHex(8), len(toolCalls)),
 			Type: "function",
 			Function: FunctionCall{
-				Name:      tc.Name,
-				Arguments: string(tc.Arguments),
+				Name:      name,
+				Arguments: args,
 			},
+		})
+		if rawBlock != "" {
+			clean = strings.Replace(clean, rawBlock, "", 1)
 		}
-		toolCalls = append(toolCalls, toolCall)
-		cleanContent = strings.Replace(cleanContent, match[0], "", 1)
 	}
 
-	return strings.TrimSpace(cleanContent), toolCalls
+	// 1) 优先解析 markdown fenced tool_call 块
+	fenceRe := regexp.MustCompile("(?is)```tool_call\\s*(\\{[\\s\\S]*?\\})\\s*```")
+	for _, m := range fenceRe.FindAllStringSubmatch(content, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		name, args, ok := parseOneToolCallJSON(strings.TrimSpace(m[1]))
+		if ok {
+			addCall(name, args, m[0])
+		}
+	}
+
+	// 2) 再扫描正文里可能出现的 JSON 对象
+	for _, raw := range extractJSONObjectCandidates(content) {
+		name, args, ok := parseOneToolCallJSON(raw)
+		if ok {
+			addCall(name, args, raw)
+		}
+	}
+
+	return strings.TrimSpace(clean), toolCalls
+}
+
+func parseOneToolCallJSON(raw string) (name string, args string, ok bool) {
+	var tc struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(raw), &tc); err != nil {
+		return "", "", false
+	}
+	if strings.TrimSpace(tc.Name) == "" {
+		return "", "", false
+	}
+	argsNorm, ok := normalizeToolArguments(tc.Arguments)
+	if !ok {
+		return "", "", false
+	}
+	return tc.Name, argsNorm, true
+}
+
+func normalizeToolArguments(raw json.RawMessage) (string, bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return "{}", true
+	}
+
+	// arguments 可能被模型输出为 JSON 字符串，需要二次反序列化
+	if strings.HasPrefix(trimmed, `"`) {
+		var inner string
+		if err := json.Unmarshal([]byte(trimmed), &inner); err != nil {
+			return "", false
+		}
+		trimmed = strings.TrimSpace(inner)
+	}
+
+	if trimmed == "" {
+		return "{}", true
+	}
+
+	var obj interface{}
+	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+		return "", false
+	}
+	canon, err := json.Marshal(obj)
+	if err != nil {
+		return "", false
+	}
+	return string(canon), true
+}
+
+func extractJSONObjectCandidates(s string) []string {
+	result := make([]string, 0)
+	b := []byte(s)
+	for i := 0; i < len(b); i++ {
+		if b[i] != '{' {
+			continue
+		}
+		depth := 0
+		inString := false
+		escaped := false
+		for j := i; j < len(b); j++ {
+			ch := b[j]
+			if inString {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if ch == '\\' {
+					escaped = true
+					continue
+				}
+				if ch == '"' {
+					inString = false
+				}
+				continue
+			}
+
+			if ch == '"' {
+				inString = true
+				continue
+			}
+			if ch == '{' {
+				depth++
+			}
+			if ch == '}' {
+				depth--
+				if depth == 0 {
+					candidate := strings.TrimSpace(string(b[i : j+1]))
+					if strings.Contains(candidate, `"name"`) && strings.Contains(candidate, `"arguments"`) {
+						result = append(result, candidate)
+					}
+					i = j
+					break
+				}
+			}
+		}
+	}
+	return result
 }
 
 func buildGeminiRequest(prompt string, session *GeminiSession, modelName string, accountCtx AccountContext) (*http.Request, error) {
