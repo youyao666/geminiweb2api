@@ -266,11 +266,29 @@ var errorCodeMap = map[int]string{
 
 const (
 	geminiInnerReqLen          = 69
+	geminiInnerReqLenThinking  = 82
 	geminiStreamingFlagIndex   = 7
 	geminiDefaultMetadataSlots = 10
 	geminiWebLanguage          = "zh-CN"
 	headerModelJSPB            = "x-goog-ext-525001261-jspb"
 	headerRequestUUIDJSPB      = "x-goog-ext-525005358-jspb"
+
+	// Deep Think / Thinking 协议字段索引 (JSPB index = protobuf field - 1)
+	idxFeatureMode    = 49 // field 50: Feature Mode (20 = DEEP_THINK)
+	idxModeCategory1  = 75 // field 76: MODE_CATEGORY
+	idxModeCategory2  = 79 // field 80: MODE_CATEGORY (重复位置)
+	idxThinkingLevel  = 80 // field 81: THINKING_LEVEL
+
+	// MODE_CATEGORY 枚举值
+	modeCategoryThinking = 2 // MODE_CATEGORY_THINKING
+
+	// THINKING_LEVEL 枚举值
+	thinkingLevelStandard = 1 // THINKING_LEVEL_STANDARD
+	thinkingLevelExtended = 2 // THINKING_LEVEL_EXTENDED
+	thinkingLevelDeepThink = 3 // THINKING_LEVEL_DEEP_THINK
+
+	// Feature Mode 枚举值（保留定义，当前不使用以避免异步模式）
+	featureModeDeepThink = 20 // DEEP_THINK
 )
 
 type webModelSpec struct {
@@ -397,9 +415,6 @@ func buildToolsPrompt(tools []Tool) string {
 
 func BuildPrompt(req ChatCompletionRequest) string {
 	var prompt strings.Builder
-	if isDeepThinkAlias(req.Model) {
-		prompt.WriteString("[System Instruction]\nUse an explicit deep-thinking workflow. Break the problem into steps internally, check assumptions, prefer correctness over speed, and only return the final answer after careful reasoning. Do not mention hidden chain-of-thought. Provide a concise answer unless the user asks for detail.\n[/System Instruction]\n\n")
-	}
 	toolsPrompt := buildToolsPrompt(req.Tools)
 	if toolsPrompt != "" {
 		prompt.WriteString(toolsPrompt)
@@ -428,7 +443,36 @@ func BuildPrompt(req ChatCompletionRequest) string {
 }
 
 func isDeepThinkAlias(modelName string) bool {
-	return strings.EqualFold(strings.TrimSpace(modelName), "gemini-3-pro-deep-think")
+	n := strings.ToLower(strings.TrimSpace(modelName))
+	return n == "gemini-3-pro-deep-think"
+}
+
+// isThinkingModel 判断模型是否需要设置 thinking 协议字段
+func isThinkingModel(modelName string) bool {
+	n := strings.ToLower(strings.TrimSpace(modelName))
+	switch n {
+	case "gemini-3-flash-thinking",
+		"gemini-3-flash-thinking-plus":
+		return true
+	default:
+		return false
+	}
+}
+
+// getThinkingLevel 返回模型对应的 thinking level 和 feature mode
+// 返回 (thinkingLevel, featureMode, needsThinkingFields)
+func getThinkingLevel(modelName string) (int, int, bool) {
+	n := strings.ToLower(strings.TrimSpace(modelName))
+	switch n {
+	case "gemini-3-pro-deep-think":
+		return thinkingLevelDeepThink, 0, true
+	case "gemini-3-flash-thinking":
+		return thinkingLevelStandard, 0, true
+	case "gemini-3-flash-thinking-plus":
+		return thinkingLevelExtended, 0, true
+	default:
+		return 0, 0, false
+	}
 }
 
 func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
@@ -526,7 +570,14 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	}
 
 	messageContent := []interface{}{prompt, 0, nil, nil, nil, nil, 0}
-	inner := make([]interface{}, geminiInnerReqLen)
+
+	// 根据是否为 thinking 模型决定数组长度
+	thinkingLevel, featureMode, needsThinking := getThinkingLevel(modelName)
+	reqLen := geminiInnerReqLen
+	if needsThinking {
+		reqLen = geminiInnerReqLenThinking
+	}
+	inner := make([]interface{}, reqLen)
 	inner[0] = messageContent
 	inner[1] = []interface{}{geminiWebLanguage}
 	inner[2] = meta
@@ -543,6 +594,17 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	inner[59] = uuidVal
 	inner[61] = []interface{}{}
 	inner[68] = 2
+
+	// 设置 Deep Think / Thinking 协议字段
+	if needsThinking {
+		inner[idxModeCategory1] = modeCategoryThinking  // field 76 = MODE_CATEGORY_THINKING
+		inner[idxModeCategory2] = modeCategoryThinking  // field 80 = MODE_CATEGORY_THINKING
+		inner[idxThinkingLevel] = thinkingLevel         // field 81 = THINKING_LEVEL
+		if featureMode != 0 {
+			inner[idxFeatureMode] = featureMode         // field 50 = Feature Mode (20 for deep think)
+		}
+		depGetLogger().Debug("已设置 thinking 协议字段: level=%d, featureMode=%d", thinkingLevel, featureMode)
+	}
 
 	innerJSON, err := json.Marshal(inner)
 	if err != nil {
