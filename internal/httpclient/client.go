@@ -96,7 +96,7 @@ func NewWithProxy(cfg config.Config, proxyOverride string, logger *logging.Logge
 
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   120 * time.Second,
+		Timeout:   300 * time.Second,
 	}
 
 	return client, proxyConfigured, proxyValue
