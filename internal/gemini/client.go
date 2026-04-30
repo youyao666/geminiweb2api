@@ -266,11 +266,29 @@ var errorCodeMap = map[int]string{
 
 const (
 	geminiInnerReqLen          = 69
+	geminiInnerReqLenThinking  = 82
 	geminiStreamingFlagIndex   = 7
 	geminiDefaultMetadataSlots = 10
 	geminiWebLanguage          = "zh-CN"
 	headerModelJSPB            = "x-goog-ext-525001261-jspb"
 	headerRequestUUIDJSPB      = "x-goog-ext-525005358-jspb"
+
+	// Deep Think / Thinking 协议字段索引 (JSPB index = protobuf field - 1)
+	idxFeatureMode    = 49 // field 50: Feature Mode (20 = DEEP_THINK)
+	idxModeCategory1  = 75 // field 76: MODE_CATEGORY
+	idxModeCategory2  = 79 // field 80: MODE_CATEGORY (重复位置)
+	idxThinkingLevel  = 80 // field 81: THINKING_LEVEL
+
+	// MODE_CATEGORY 枚举值
+	modeCategoryThinking = 2 // MODE_CATEGORY_THINKING
+
+	// THINKING_LEVEL 枚举值
+	thinkingLevelStandard = 1 // THINKING_LEVEL_STANDARD
+	thinkingLevelExtended = 2 // THINKING_LEVEL_EXTENDED
+	thinkingLevelDeepThink = 3 // THINKING_LEVEL_DEEP_THINK
+
+	// Feature Mode 枚举值（保留定义，当前不使用以避免异步模式）
+	featureModeDeepThink = 20 // DEEP_THINK
 )
 
 type webModelSpec struct {
@@ -397,9 +415,6 @@ func buildToolsPrompt(tools []Tool) string {
 
 func BuildPrompt(req ChatCompletionRequest) string {
 	var prompt strings.Builder
-	if isDeepThinkAlias(req.Model) {
-		prompt.WriteString("[System Instruction]\nUse an explicit deep-thinking workflow. Break the problem into steps internally, check assumptions, prefer correctness over speed, and only return the final answer after careful reasoning. Do not mention hidden chain-of-thought. Provide a concise answer unless the user asks for detail.\n[/System Instruction]\n\n")
-	}
 	toolsPrompt := buildToolsPrompt(req.Tools)
 	if toolsPrompt != "" {
 		prompt.WriteString(toolsPrompt)
@@ -428,7 +443,36 @@ func BuildPrompt(req ChatCompletionRequest) string {
 }
 
 func isDeepThinkAlias(modelName string) bool {
-	return strings.EqualFold(strings.TrimSpace(modelName), "gemini-3-pro-deep-think")
+	n := strings.ToLower(strings.TrimSpace(modelName))
+	return n == "gemini-3-pro-deep-think"
+}
+
+// isThinkingModel 判断模型是否需要设置 thinking 协议字段
+func isThinkingModel(modelName string) bool {
+	n := strings.ToLower(strings.TrimSpace(modelName))
+	switch n {
+	case "gemini-3-flash-thinking",
+		"gemini-3-flash-thinking-plus":
+		return true
+	default:
+		return false
+	}
+}
+
+// getThinkingLevel 返回模型对应的 thinking level 和 feature mode
+// 返回 (thinkingLevel, featureMode, needsThinkingFields)
+func getThinkingLevel(modelName string) (int, int, bool) {
+	n := strings.ToLower(strings.TrimSpace(modelName))
+	switch n {
+	case "gemini-3-pro-deep-think":
+		return thinkingLevelDeepThink, 0, true
+	case "gemini-3-flash-thinking":
+		return thinkingLevelStandard, 0, true
+	case "gemini-3-flash-thinking-plus":
+		return thinkingLevelExtended, 0, true
+	default:
+		return 0, 0, false
+	}
 }
 
 func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
@@ -436,70 +480,156 @@ func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
 		return content, nil
 	}
 
-	var toolCalls []ToolCall
-	cleanContent := content
-	re1 := regexp.MustCompile(`(?s)\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})\s*\}`)
-	matches1 := re1.FindAllStringSubmatch(content, -1)
-	for i, match := range matches1 {
-		name := match[1]
-		args := match[2]
-		for _, t := range tools {
-			if t.Function.Name == name {
-				toolCalls = append(toolCalls, ToolCall{
-					ID:   fmt.Sprintf("call_%s_%d", support.GenerateRandomHex(8), i),
-					Type: "function",
-					Function: FunctionCall{
-						Name:      name,
-						Arguments: args,
-					},
-				})
-				cleanContent = strings.Replace(cleanContent, match[0], "", 1)
-				break
-			}
-		}
+	allowed := make(map[string]struct{}, len(tools))
+	for _, t := range tools {
+		allowed[t.Function.Name] = struct{}{}
 	}
 
-	if len(toolCalls) > 0 {
-		return strings.TrimSpace(cleanContent), toolCalls
-	}
+	clean := content
+	toolCalls := make([]ToolCall, 0)
+	seen := make(map[string]struct{})
 
-	re2 := regexp.MustCompile("(?s)```tool_call\\s*\\n?(\\{.*?\\})\\s*```")
-	matches2 := re2.FindAllStringSubmatch(content, -1)
-	for i, match := range matches2 {
-		var tc struct {
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
+	addCall := func(name, args, rawBlock string) {
+		if _, ok := allowed[name]; !ok {
+			return
 		}
-
-		jsonStr := match[1]
-		if err := json.Unmarshal([]byte(jsonStr), &tc); err != nil {
-			depGetLogger().Debug("解析工具调用失败: %v", err)
-			continue
+		key := name + "\n" + args
+		if _, ok := seen[key]; ok {
+			return
 		}
-		toolExists := false
-		for _, t := range tools {
-			if t.Function.Name == tc.Name {
-				toolExists = true
-				break
-			}
-		}
-		if !toolExists {
-			continue
-		}
-
-		toolCall := ToolCall{
-			ID:   fmt.Sprintf("call_%s_%d", support.GenerateRandomHex(8), i),
+		seen[key] = struct{}{}
+		toolCalls = append(toolCalls, ToolCall{
+			ID:   fmt.Sprintf("call_%s_%d", support.GenerateRandomHex(8), len(toolCalls)),
 			Type: "function",
 			Function: FunctionCall{
-				Name:      tc.Name,
-				Arguments: string(tc.Arguments),
+				Name:      name,
+				Arguments: args,
 			},
+		})
+		if rawBlock != "" {
+			clean = strings.Replace(clean, rawBlock, "", 1)
 		}
-		toolCalls = append(toolCalls, toolCall)
-		cleanContent = strings.Replace(cleanContent, match[0], "", 1)
 	}
 
-	return strings.TrimSpace(cleanContent), toolCalls
+	// 1) 优先解析 markdown fenced tool_call 块
+	fenceRe := regexp.MustCompile("(?is)```tool_call\\s*(\\{[\\s\\S]*?\\})\\s*```")
+	for _, m := range fenceRe.FindAllStringSubmatch(content, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		name, args, ok := parseOneToolCallJSON(strings.TrimSpace(m[1]))
+		if ok {
+			addCall(name, args, m[0])
+		}
+	}
+
+	// 2) 再扫描正文里可能出现的 JSON 对象
+	for _, raw := range extractJSONObjectCandidates(content) {
+		name, args, ok := parseOneToolCallJSON(raw)
+		if ok {
+			addCall(name, args, raw)
+		}
+	}
+
+	return strings.TrimSpace(clean), toolCalls
+}
+
+func parseOneToolCallJSON(raw string) (name string, args string, ok bool) {
+	var tc struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(raw), &tc); err != nil {
+		return "", "", false
+	}
+	if strings.TrimSpace(tc.Name) == "" {
+		return "", "", false
+	}
+	argsNorm, ok := normalizeToolArguments(tc.Arguments)
+	if !ok {
+		return "", "", false
+	}
+	return tc.Name, argsNorm, true
+}
+
+func normalizeToolArguments(raw json.RawMessage) (string, bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return "{}", true
+	}
+
+	// arguments 可能被模型输出为 JSON 字符串，需要二次反序列化
+	if strings.HasPrefix(trimmed, `"`) {
+		var inner string
+		if err := json.Unmarshal([]byte(trimmed), &inner); err != nil {
+			return "", false
+		}
+		trimmed = strings.TrimSpace(inner)
+	}
+
+	if trimmed == "" {
+		return "{}", true
+	}
+
+	var obj interface{}
+	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+		return "", false
+	}
+	canon, err := json.Marshal(obj)
+	if err != nil {
+		return "", false
+	}
+	return string(canon), true
+}
+
+func extractJSONObjectCandidates(s string) []string {
+	result := make([]string, 0)
+	b := []byte(s)
+	for i := 0; i < len(b); i++ {
+		if b[i] != '{' {
+			continue
+		}
+		depth := 0
+		inString := false
+		escaped := false
+		for j := i; j < len(b); j++ {
+			ch := b[j]
+			if inString {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if ch == '\\' {
+					escaped = true
+					continue
+				}
+				if ch == '"' {
+					inString = false
+				}
+				continue
+			}
+
+			if ch == '"' {
+				inString = true
+				continue
+			}
+			if ch == '{' {
+				depth++
+			}
+			if ch == '}' {
+				depth--
+				if depth == 0 {
+					candidate := strings.TrimSpace(string(b[i : j+1]))
+					if strings.Contains(candidate, `"name"`) && strings.Contains(candidate, `"arguments"`) {
+						result = append(result, candidate)
+					}
+					i = j
+					break
+				}
+			}
+		}
+	}
+	return result
 }
 
 func buildGeminiRequest(prompt string, session *GeminiSession, modelName string, accountCtx AccountContext) (*http.Request, error) {
@@ -526,7 +656,14 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	}
 
 	messageContent := []interface{}{prompt, 0, nil, nil, nil, nil, 0}
-	inner := make([]interface{}, geminiInnerReqLen)
+
+	// 根据是否为 thinking 模型决定数组长度
+	thinkingLevel, featureMode, needsThinking := getThinkingLevel(modelName)
+	reqLen := geminiInnerReqLen
+	if needsThinking {
+		reqLen = geminiInnerReqLenThinking
+	}
+	inner := make([]interface{}, reqLen)
 	inner[0] = messageContent
 	inner[1] = []interface{}{geminiWebLanguage}
 	inner[2] = meta
@@ -543,6 +680,17 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	inner[59] = uuidVal
 	inner[61] = []interface{}{}
 	inner[68] = 2
+
+	// 设置 Deep Think / Thinking 协议字段
+	if needsThinking {
+		inner[idxModeCategory1] = modeCategoryThinking  // field 76 = MODE_CATEGORY_THINKING
+		inner[idxModeCategory2] = modeCategoryThinking  // field 80 = MODE_CATEGORY_THINKING
+		inner[idxThinkingLevel] = thinkingLevel         // field 81 = THINKING_LEVEL
+		if featureMode != 0 {
+			inner[idxFeatureMode] = featureMode         // field 50 = Feature Mode (20 for deep think)
+		}
+		depGetLogger().Debug("已设置 thinking 协议字段: level=%d, featureMode=%d", thinkingLevel, featureMode)
+	}
 
 	innerJSON, err := json.Marshal(inner)
 	if err != nil {
