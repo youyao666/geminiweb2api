@@ -442,7 +442,7 @@ func (s *Server) currentModelList() []string {
 	if len(configured) > 0 {
 		return configured
 	}
-	return []string{"gemini-3-pro", "gemini-3-flash"}
+	return []string{"gemini-3-pro", "gemini-3-pro-deep-think", "gemini-3-flash"}
 }
 
 func (s *Server) normalizeModel(model string) string {

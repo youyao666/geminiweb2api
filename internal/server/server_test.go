@@ -127,7 +127,7 @@ func TestHandleModelsUses3SeriesDefaults(t *testing.T) {
 	for _, model := range resp.Data {
 		got = append(got, model.ID)
 	}
-	expected := []string{"gemini-3-pro", "gemini-3-flash"}
+	expected := []string{"gemini-3-pro", "gemini-3-pro-deep-think", "gemini-3-flash"}
 	if len(got) != len(expected) {
 		t.Fatalf("expected %d models, got %d: %v", len(expected), len(got), got)
 	}

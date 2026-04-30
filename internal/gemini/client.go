@@ -289,6 +289,7 @@ var modelSpecMap = map[string]webModelSpec{
 	"gemini-3-pro":                 {"9d8ca3786ebdfbea", 1},
 	"gemini-pro":                   {"9d8ca3786ebdfbea", 1},
 	"gemini-2.5-pro":               {"9d8ca3786ebdfbea", 1},
+	"gemini-3-pro-deep-think":      {"e6fa609c3fa255c0", 4},
 	"gemini-3-pro-plus":            {"e6fa609c3fa255c0", 4},
 	"gemini-3-pro-advanced":        {"e6fa609c3fa255c0", 2},
 	"gemini-3.1":                   {"e6fa609c3fa255c0", 2},
@@ -396,6 +397,9 @@ func buildToolsPrompt(tools []Tool) string {
 
 func BuildPrompt(req ChatCompletionRequest) string {
 	var prompt strings.Builder
+	if isDeepThinkAlias(req.Model) {
+		prompt.WriteString("[System Instruction]\nUse an explicit deep-thinking workflow. Break the problem into steps internally, check assumptions, prefer correctness over speed, and only return the final answer after careful reasoning. Do not mention hidden chain-of-thought. Provide a concise answer unless the user asks for detail.\n[/System Instruction]\n\n")
+	}
 	toolsPrompt := buildToolsPrompt(req.Tools)
 	if toolsPrompt != "" {
 		prompt.WriteString(toolsPrompt)
@@ -421,6 +425,10 @@ func BuildPrompt(req ChatCompletionRequest) string {
 		}
 	}
 	return prompt.String()
+}
+
+func isDeepThinkAlias(modelName string) bool {
+	return strings.EqualFold(strings.TrimSpace(modelName), "gemini-3-pro-deep-think")
 }
 
 func parseToolCalls(content string, tools []Tool) (string, []ToolCall) {
