@@ -200,6 +200,17 @@ func (s *Server) loadPersistentState() error {
 		bindings = append(bindings, token.SessionBinding{SessionKey: sessionKey, AccountID: binding.AccountID, BoundAt: binding.BoundAt, LastUsedAt: binding.LastUsedAt})
 	}
 	s.tokenManager.RestoreSessionBindings(bindings)
+	tokenSnapshots := make(map[string]token.AccountTokenSnapshot, len(state.AccountTokens))
+	for accountID, snapshot := range state.AccountTokens {
+		tokenSnapshots[accountID] = token.AccountTokenSnapshot{
+			SNlM0e:    snapshot.SNlM0e,
+			BLToken:   snapshot.BLToken,
+			FSID:      snapshot.FSID,
+			ReqID:     snapshot.ReqID,
+			FetchedAt: snapshot.FetchedAt,
+		}
+	}
+	s.tokenManager.RestoreTokenSnapshots(tokenSnapshots)
 	return nil
 }
 
@@ -208,9 +219,19 @@ func (s *Server) savePersistentState() {
 		return
 	}
 	bindings := s.tokenManager.SessionBindings()
-	state := persistentState{SessionBindings: map[string]persistentBinding{}}
+	tokenSnapshots := s.tokenManager.TokenSnapshots()
+	state := persistentState{SessionBindings: map[string]persistentBinding{}, AccountTokens: map[string]tokenSnapshot{}}
 	for _, binding := range bindings {
 		state.SessionBindings[binding.SessionKey] = persistentBinding{AccountID: binding.AccountID, BoundAt: binding.BoundAt, LastUsedAt: binding.LastUsedAt}
+	}
+	for accountID, snapshot := range tokenSnapshots {
+		state.AccountTokens[accountID] = tokenSnapshot{
+			SNlM0e:    snapshot.SNlM0e,
+			BLToken:   snapshot.BLToken,
+			FSID:      snapshot.FSID,
+			ReqID:     snapshot.ReqID,
+			FetchedAt: snapshot.FetchedAt,
+		}
 	}
 	if err := s.stateStore.save(state); err != nil {
 		s.Logger().Warn("保存持久化状态失败: %v", err)
@@ -421,7 +442,7 @@ func (s *Server) currentModelList() []string {
 	if len(configured) > 0 {
 		return configured
 	}
-	return []string{"gemini-3-pro", "gemini-3-flash", "gemini-2.5-pro", "gemini-2.5-flash"}
+	return []string{"gemini-3-pro", "gemini-3-flash"}
 }
 
 func (s *Server) normalizeModel(model string) string {
@@ -735,6 +756,17 @@ func (s *Server) handleAccountAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeError(w, http.StatusNotFound, "account not found")
+	case "cookie-health":
+		if r.Method != http.MethodGet {
+			s.writeError(w, http.StatusMethodNotAllowed, "请求方法不允许")
+			return
+		}
+		health, ok := s.tokenManager.CookieHealth(accountID)
+		if !ok {
+			s.writeError(w, http.StatusNotFound, "account not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, health)
 	case "delete":
 		if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 			s.writeError(w, http.StatusMethodNotAllowed, "请求方法不允许")

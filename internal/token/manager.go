@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +16,6 @@ import (
 	"main/internal/config"
 	"main/internal/httpclient"
 	"main/internal/logging"
-	"main/internal/support"
 )
 
 const defaultAccountID = "__default__"
@@ -96,6 +96,37 @@ type SessionBinding struct {
 	AccountID  string    `json:"account_id"`
 	BoundAt    time.Time `json:"bound_at"`
 	LastUsedAt time.Time `json:"last_used_at"`
+}
+
+type AccountTokenSnapshot struct {
+	SNlM0e    string    `json:"snlm0e"`
+	BLToken   string    `json:"bl_token"`
+	FSID      string    `json:"fsid"`
+	ReqID     int64     `json:"req_id"`
+	FetchedAt time.Time `json:"fetched_at"`
+}
+
+type CookieHealth struct {
+	AccountID            string           `json:"account_id"`
+	CookieCount          int              `json:"cookie_count"`
+	ImportantMissing     []string         `json:"important_missing"`
+	ImportantPresent     map[string]bool  `json:"important_present"`
+	AbuseExemption       CookieTimeHint   `json:"abuse_exemption"`
+	AnalyticsTimeHints   []CookieTimeHint `json:"analytics_time_hints,omitempty"`
+	OpaqueSessionCookies []string         `json:"opaque_session_cookies,omitempty"`
+	StateCode            string           `json:"state_code"`
+	StateLabel           string           `json:"state_label"`
+	TokenReady           bool             `json:"token_ready"`
+	LastError            string           `json:"last_error,omitempty"`
+}
+
+type CookieTimeHint struct {
+	Name      string    `json:"name"`
+	Source    string    `json:"source"`
+	Epoch     int64     `json:"epoch,omitempty"`
+	Time      time.Time `json:"time,omitempty"`
+	AgeSec    int64     `json:"age_sec,omitempty"`
+	ValueSeen bool      `json:"value_seen"`
 }
 
 type SelectedAccount struct {
@@ -217,17 +248,6 @@ func (m *Manager) RefreshAccountNow(accountID string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("account not found: %s", accountID)
 	}
-	acc.tokenInfo.mutex.Lock()
-	acc.tokenInfo.SNlM0e = ""
-	acc.tokenInfo.BLToken = ""
-	acc.tokenInfo.FSID = ""
-	acc.tokenInfo.ReqID = 0
-	acc.tokenInfo.FetchedAt = time.Time{}
-	acc.tokenInfo.mutex.Unlock()
-	acc.sessionTokens = make(map[string]*AnonToken)
-	acc.lastError = ""
-	acc.backoffUntil = time.Time{}
-	acc.consecutiveFailures = 0
 	cfg := acc.cfg
 	m.mu.Unlock()
 
@@ -235,9 +255,29 @@ func (m *Manager) RefreshAccountNow(accountID string) error {
 		return nil
 	}
 	if err := m.fetchToken(accountID); err != nil {
-		m.MarkAccountFailure(accountID, err.Error())
+		m.mu.Lock()
+		if acc := m.accounts[accountID]; acc != nil {
+			acc.tokenInfo.mutex.RLock()
+			hasUsableToken := strings.TrimSpace(acc.cfg.Token) != "" || strings.TrimSpace(acc.tokenInfo.SNlM0e) != ""
+			acc.tokenInfo.mutex.RUnlock()
+			acc.lastError = err.Error()
+			if hasUsableToken {
+				acc.backoffUntil = time.Time{}
+				acc.consecutiveFailures = 0
+			}
+		}
+		m.mu.Unlock()
 		return err
 	}
+
+	m.mu.Lock()
+	if acc := m.accounts[accountID]; acc != nil {
+		acc.sessionTokens = make(map[string]*AnonToken)
+		acc.lastError = ""
+		acc.backoffUntil = time.Time{}
+		acc.consecutiveFailures = 0
+	}
+	m.mu.Unlock()
 	return nil
 }
 
@@ -441,6 +481,158 @@ func (m *Manager) SessionBindings() []SessionBinding {
 		return bindings[i].SessionKey < bindings[j].SessionKey
 	})
 	return bindings
+}
+
+func (m *Manager) CookieHealth(accountID string) (CookieHealth, bool) {
+	m.mu.RLock()
+	acc := m.accounts[accountID]
+	m.mu.RUnlock()
+	if acc == nil {
+		return CookieHealth{}, false
+	}
+
+	cookies := parseCookiePairs(acc.cfg.Cookies)
+	important := []string{"COMPASS", "GOOGLE_ABUSE_EXEMPTION", "SID", "__Secure-1PSID", "__Secure-3PSID", "SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID", "SIDCC", "__Secure-1PSIDCC", "__Secure-3PSIDCC", "__Secure-1PSIDTS", "__Secure-3PSIDTS"}
+	present := make(map[string]bool, len(important))
+	missing := make([]string, 0)
+	for _, key := range important {
+		_, ok := cookies[key]
+		present[key] = ok
+		if !ok {
+			missing = append(missing, key)
+		}
+	}
+
+	statuses := m.AccountsStatus()
+	var status AccountStatus
+	for _, candidate := range statuses {
+		if candidate.ID == accountID {
+			status = candidate
+			break
+		}
+	}
+
+	health := CookieHealth{
+		AccountID:            accountID,
+		CookieCount:          len(cookies),
+		ImportantMissing:     missing,
+		ImportantPresent:     present,
+		AbuseExemption:       cookieTimeHint("GOOGLE_ABUSE_EXEMPTION", cookies["GOOGLE_ABUSE_EXEMPTION"], `(?:^|:)TM=(\d{10})(?:[:;]|$)`, "TM"),
+		AnalyticsTimeHints:   analyticsCookieTimeHints(cookies),
+		OpaqueSessionCookies: opaqueSessionCookies(cookies),
+		StateCode:            status.StateCode,
+		StateLabel:           status.StateLabel,
+		TokenReady:           status.TokenReady,
+		LastError:            status.LastError,
+	}
+	return health, true
+}
+
+func parseCookiePairs(raw string) map[string]string {
+	cookies := map[string]string{}
+	for _, part := range strings.Split(raw, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		cookies[key] = strings.TrimSpace(value)
+	}
+	return cookies
+}
+
+func cookieTimeHint(name string, value string, pattern string, source string) CookieTimeHint {
+	hint := CookieTimeHint{Name: name, Source: source, ValueSeen: strings.TrimSpace(value) != ""}
+	if value == "" {
+		return hint
+	}
+	matches := regexp.MustCompile(pattern).FindStringSubmatch(value)
+	if len(matches) < 2 {
+		return hint
+	}
+	epoch, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil {
+		return hint
+	}
+	hint.Epoch = epoch
+	hint.Time = time.Unix(epoch, 0).UTC()
+	hint.AgeSec = int64(time.Since(hint.Time).Seconds())
+	return hint
+}
+
+func analyticsCookieTimeHints(cookies map[string]string) []CookieTimeHint {
+	hints := make([]CookieTimeHint, 0)
+	for key, value := range cookies {
+		if strings.HasPrefix(key, "_ga_") {
+			hints = append(hints, cookieTimeHint(key, value, `\$t(\d{10})`, "$t"))
+		}
+	}
+	slices.SortFunc(hints, func(a, b CookieTimeHint) int { return strings.Compare(a.Name, b.Name) })
+	return hints
+}
+
+func opaqueSessionCookies(cookies map[string]string) []string {
+	keys := make([]string, 0)
+	for _, key := range []string{"__Secure-1PSIDTS", "__Secure-3PSIDTS"} {
+		if strings.HasPrefix(cookies[key], "sidts-") {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func (m *Manager) TokenSnapshots() map[string]AccountTokenSnapshot {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	snapshots := make(map[string]AccountTokenSnapshot, len(m.accounts))
+	for _, id := range sortedAccountIDs(m.accounts) {
+		acc := m.accounts[id]
+		if acc == nil {
+			continue
+		}
+		acc.tokenInfo.mutex.RLock()
+		snapshot := AccountTokenSnapshot{
+			SNlM0e:    acc.tokenInfo.SNlM0e,
+			BLToken:   acc.tokenInfo.BLToken,
+			FSID:      acc.tokenInfo.FSID,
+			ReqID:     acc.tokenInfo.ReqID,
+			FetchedAt: acc.tokenInfo.FetchedAt,
+		}
+		acc.tokenInfo.mutex.RUnlock()
+		if strings.TrimSpace(snapshot.SNlM0e) == "" && strings.TrimSpace(snapshot.BLToken) == "" && strings.TrimSpace(snapshot.FSID) == "" {
+			continue
+		}
+		snapshots[id] = snapshot
+	}
+	return snapshots
+}
+
+func (m *Manager) RestoreTokenSnapshots(snapshots map[string]AccountTokenSnapshot) {
+	if len(snapshots) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for accountID, snapshot := range snapshots {
+		acc := m.accounts[accountID]
+		if acc == nil {
+			continue
+		}
+		acc.tokenInfo.mutex.Lock()
+		acc.tokenInfo.SNlM0e = strings.TrimSpace(snapshot.SNlM0e)
+		acc.tokenInfo.BLToken = strings.TrimSpace(snapshot.BLToken)
+		acc.tokenInfo.FSID = strings.TrimSpace(snapshot.FSID)
+		acc.tokenInfo.ReqID = snapshot.ReqID
+		acc.tokenInfo.FetchedAt = snapshot.FetchedAt
+		acc.tokenInfo.mutex.Unlock()
+	}
 }
 
 func (m *Manager) RestoreSessionBindings(bindings []SessionBinding) {
@@ -679,10 +871,24 @@ func (m *Manager) ensureAccountReady(accountID string) error {
 
 	acc.tokenInfo.mutex.RLock()
 	needRefresh := acc.tokenInfo.SNlM0e == "" || acc.tokenInfo.BLToken == "" || acc.tokenInfo.FSID == "" || time.Since(acc.tokenInfo.FetchedAt) > 30*time.Minute
+	hasUsableToken := strings.TrimSpace(acc.cfg.Token) != "" || strings.TrimSpace(acc.tokenInfo.SNlM0e) != ""
 	acc.tokenInfo.mutex.RUnlock()
 	if needRefresh && strings.TrimSpace(acc.cfg.Cookies) != "" {
 		if err := m.fetchToken(accountID); err != nil {
-			m.MarkAccountFailure(accountID, err.Error())
+			m.mu.Lock()
+			if acc := m.accounts[accountID]; acc != nil {
+				acc.lastError = err.Error()
+				if hasUsableToken {
+					acc.backoffUntil = time.Time{}
+					acc.consecutiveFailures = 0
+				} else {
+					m.recordFailureLocked(acc, err.Error())
+				}
+			}
+			m.mu.Unlock()
+			if hasUsableToken {
+				return nil
+			}
 			return err
 		}
 	}
@@ -708,10 +914,6 @@ func (m *Manager) FetchAnonymousTokenForAccount(accountID string) (string, error
 	if strings.TrimSpace(acc.cfg.Cookies) != "" {
 		req.Header.Set("Cookie", acc.cfg.Cookies)
 	}
-	randomIP := support.GenerateRandomIP()
-	req.Header.Set("X-Forwarded-For", randomIP)
-	req.Header.Set("X-Real-IP", randomIP)
-
 	resp, err := m.clientForProxy(acc.cfg.Proxy).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
@@ -758,8 +960,6 @@ func (m *Manager) fetchToken(accountID string) error {
 	req.Header.Set("Cookie", acc.cfg.Cookies)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	req.Header.Set("X-Forwarded-For", support.GenerateRandomIP())
-
 	resp, err := m.clientForProxy(acc.cfg.Proxy).Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
@@ -790,7 +990,11 @@ func (m *Manager) fetchToken(accountID string) error {
 
 func missingRequestTokenError(body []byte) error {
 	bodyText := strings.ToLower(string(body))
-	if strings.Contains(bodyText, "before you continue") || strings.Contains(bodyText, "使用前须知") || strings.Contains(bodyText, "同意") || strings.Contains(bodyText, "accounts.google") || strings.Contains(bodyText, "sign in") || strings.Contains(bodyText, "登录") {
+	state := extractPageState(body)
+	if state.BLToken != "" || state.FSID != "" {
+		return fmt.Errorf("request token not found in Gemini app page")
+	}
+	if strings.Contains(bodyText, "before you continue") || strings.Contains(bodyText, "使用前须知") || strings.Contains(bodyText, "accounts.google") || strings.Contains(bodyText, "sign in") || strings.Contains(bodyText, "登录") {
 		return fmt.Errorf("Gemini returned login/consent page; open gemini.google.com in the same browser, accept prompts, then copy the full Cookie again")
 	}
 	if strings.Contains(bodyText, "captcha") || strings.Contains(bodyText, "unusual traffic") || strings.Contains(bodyText, "sorry/index") {
@@ -951,7 +1155,20 @@ func (m *Manager) refreshAllAccountsIfNeeded(force bool) {
 			}
 		}
 		if err := m.fetchToken(id); err != nil {
-			m.MarkAccountFailure(id, err.Error())
+			m.mu.Lock()
+			if acc := m.accounts[id]; acc != nil {
+				acc.tokenInfo.mutex.RLock()
+				hasUsableToken := strings.TrimSpace(acc.cfg.Token) != "" || strings.TrimSpace(acc.tokenInfo.SNlM0e) != ""
+				acc.tokenInfo.mutex.RUnlock()
+				acc.lastError = err.Error()
+				if !hasUsableToken {
+					m.recordFailureLocked(acc, err.Error())
+				} else {
+					acc.backoffUntil = time.Time{}
+					acc.consecutiveFailures = 0
+				}
+			}
+			m.mu.Unlock()
 			m.getLogger().Warn("账号 %s 自动刷新令牌失败: %v", id, err)
 		}
 	}

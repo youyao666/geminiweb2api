@@ -34,7 +34,7 @@
       .list,.bindings{display:grid;gap:10px}.item{padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:#fff}.item strong{display:block;font-size:.95rem}.item span{display:block;margin-top:6px;color:var(--soft);line-height:1.7}.item-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
       .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.toolbar input,.toolbar select{flex:1;min-width:180px;min-height:40px;padding:0 12px;border:1px solid var(--line);border-radius:12px;background:#fff}
       .account-table{display:grid;gap:12px}
-      .account{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;transition:border-color .18s,box-shadow .18s,background .18s}.account.active{border-color:#111827;box-shadow:0 0 0 1px #111827, var(--shadow);background:#fcfcfc}.account-top,.account-meta,.account-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.account-top strong{font-size:1rem}.account-top span,.account-meta span{color:var(--soft);font-size:.92rem}.account-meta{margin-top:10px}.tags{display:flex;gap:8px;flex-wrap:wrap}.tag{display:inline-flex;align-items:center;min-height:30px;padding:0 10px;border-radius:999px;background:#f3f4f6;color:#374151;font-size:.84rem}.tag.ok{background:#ecfdf5;color:#166534}.tag.warn{background:#fff7ed;color:#b45309}.tag.danger{background:#fef2f2;color:#b91c1c}.failures{margin-top:12px;display:grid;gap:8px}.failure{padding:10px 12px;border-radius:12px;background:#fafafa;border:1px solid var(--line)}.failure strong{font-size:.82rem;color:var(--danger)}.failure span{display:block;margin-top:4px;color:var(--soft);font-size:.88rem;line-height:1.6}
+      .account{border:1px solid var(--line);border-radius:16px;padding:18px;background:#fff;transition:border-color .18s,box-shadow .18s,background .18s}.account.active{border-color:#111827;box-shadow:0 0 0 1px #111827, var(--shadow);background:#fcfcfc}.account-top,.account-meta,.account-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.account-top strong{font-size:1rem}.account-top span,.account-meta span{color:var(--soft);font-size:.92rem}.account-meta{margin-top:10px}.tags{display:flex;gap:8px;flex-wrap:wrap}.tag{display:inline-flex;align-items:center;min-height:30px;padding:0 10px;border-radius:999px;background:#f3f4f6;color:#374151;font-size:.84rem}.tag.ok{background:#ecfdf5;color:#166534}.tag.warn{background:#fff7ed;color:#b45309}.tag.danger{background:#fef2f2;color:#b91c1c}.cookie-health{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:14px;background:#fafafa;display:grid;gap:8px}.cookie-health strong{font-size:.9rem}.cookie-health span{color:var(--soft);font-size:.88rem;line-height:1.6}.cookie-health.ok{background:#f7fef9;border-color:#bbf7d0}.cookie-health.warn{background:#fffaf0;border-color:#fed7aa}.failures{margin-top:12px;display:grid;gap:8px}.failure{padding:10px 12px;border-radius:12px;background:#fafafa;border:1px solid var(--line)}.failure strong{font-size:.82rem;color:var(--danger)}.failure span{display:block;margin-top:4px;color:var(--soft);font-size:.88rem;line-height:1.6}
       .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.field{display:grid;gap:8px}.field label{font-size:.9rem;font-weight:600}.field input,.field textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;color:var(--text)}.field textarea{min-height:116px;resize:vertical}.field.full{grid-column:1/-1}
       .cookie-builder{display:grid;gap:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:#fafafa}.cookie-builder summary{cursor:pointer;font-weight:700}.cookie-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}.cookie-grid input{width:100%;min-height:40px;border:1px solid var(--line);border-radius:12px;padding:0 10px;background:#fff}.helper{display:block;color:var(--soft);font-size:.86rem;line-height:1.6}
       .checkbox{display:flex;align-items:center;gap:10px;color:var(--soft)}.checkbox input{width:16px;height:16px}
@@ -335,6 +335,7 @@
         latestBindings:[],
         latestNotes:[],
         latestStats:{},
+        cookieHealth:{},
         activeAccountID:localStorage.getItem(storageKeys.activeAccount)||"",
         refreshTimer:null,
         autoRefreshEnabled:localStorage.getItem(storageKeys.autoRefresh)!=="false",
@@ -358,7 +359,7 @@
             noBindings:"当前还没有活跃绑定。",noAccounts:"暂无账号，请在右侧表单新增。",noNotes:"暂无备注。",noIncidents:"当前没有异常记录。",
             authMissing:"请先输入 API Key。",saved:"已保存",saveFailed:"保存失败",refreshSuccess:"账号已刷新",actionDone:"操作已完成",deleted:"账号已删除",rebound:"绑定已迁移",exported:"导出完成",
             searchPlaceholder:"搜索账号 ID 或邮箱",apiKeyPlaceholder:"输入 API Key",tokenPlaceholder:"可选",proxyPlaceholder:"可选，不填则走全局代理/本机网络",cookiesPlaceholder:"可选，建议登录态场景填写",filterAll:"全部账号",filterHealthy:"仅健康",filterBackoff:"仅避退",filterDisabled:"仅禁用",sortDefault:"默认排序",sortFailures:"按失败次数",sortBindings:"按绑定数",sortUpdated:"按最近使用",
-            runtimeStatus:"运行状态",loadStatus:"账号状态",boundSessions:"绑定会话",lastError:"最近错误",recentFailures:"最近失败",actionRequired:"处理建议",nextRetryAt:"下次重试",never:"从未",enabled:"启用",disabled:"禁用",usingCookies:"Cookies",manualToken:"手动 Token",hasProxy:"代理已配置",noProxy:"本机/全局代理",tokenReady:"Token 就绪",tokenNotReady:"登录态未就绪",backoff:"避退中",healthy:"健康",unbind:"解绑",rebind:"迁移绑定",unbindDone:"绑定已解除",details:"详情",edit:"编辑",refresh:"刷新",enable:"启用",disable:"禁用",delete:"删除",editModalTitle:"编辑账号凭证",editModalHint:"此弹窗会显示敏感字段，仅在输入 API Key 后可打开。",saveRepair:"保存修复",cancel:"取消",drawerTitle:"账号详情",drawerSubtitle:"查看账号运行时状态、最近失败和绑定数量。",timelineTitle:"最近失败",close:"关闭",deleteConfirm:(id)=>`确认删除账号 ${id} 吗？`,
+            runtimeStatus:"运行状态",loadStatus:"账号状态",boundSessions:"绑定会话",lastError:"最近错误",recentFailures:"最近失败",actionRequired:"处理建议",nextRetryAt:"下次重试",never:"从未",enabled:"启用",disabled:"禁用",usingCookies:"Cookies",manualToken:"手动 Token",hasProxy:"代理已配置",noProxy:"本机/全局代理",tokenReady:"Token 就绪",tokenNotReady:"登录态未就绪",backoff:"避退中",healthy:"健康",cookieHealth:"Cookie 体检",cookieHealthOK:"关键 Cookie 完整",cookieHealthMissing:"关键 Cookie 缺失",cookieCount:"Cookie 数量",abuseTime:"风控凭证时间",abuseAge:"距今",missingCookies:"缺失字段",checkCookie:"体检 Cookie",unbind:"解绑",rebind:"迁移绑定",unbindDone:"绑定已解除",details:"详情",edit:"编辑",refresh:"刷新",enable:"启用",disable:"禁用",delete:"删除",editModalTitle:"编辑账号凭证",editModalHint:"此弹窗会显示敏感字段，仅在输入 API Key 后可打开。",saveRepair:"保存修复",cancel:"取消",drawerTitle:"账号详情",drawerSubtitle:"查看账号运行时状态、最近失败和绑定数量。",timelineTitle:"最近失败",close:"关闭",deleteConfirm:(id)=>`确认删除账号 ${id} 吗？`,
             bindingItem:(session,account)=>`会话 ${session} 绑定到 ${account}`
           },
           labels:{uptime:"运行时长",uptimeSub:"服务在线时长",total:"总请求数",totalSub:"累计处理量",success:"成功请求",fail:"失败请求",input:"输入 Token",inputSub:"累计输入",output:"输出 Token",outputSub:"累计输出",avg:"均次 Token",avgSub:"总 token / 总请求",poolTotal:"总账号",poolTotalSub:"已载入账号",poolHealthy:"健康账号",poolHealthySub:"当前可分配",poolBackoff:"未就绪",poolBackoffSub:"需更新登录态",poolDisabled:"禁用账号",poolDisabledSub:"人工停用"}
@@ -378,7 +379,7 @@
             noBindings:"No active bindings yet.",noAccounts:"No accounts yet. Create one from the form.",noNotes:"No notes available.",noIncidents:"No incidents right now.",
             authMissing:"Enter API key first.",saved:"Saved",saveFailed:"Save failed",refreshSuccess:"Account refreshed",actionDone:"Action completed",deleted:"Account deleted",rebound:"Binding moved",exported:"Export complete",
             searchPlaceholder:"Search by account ID or email",apiKeyPlaceholder:"Enter API Key",tokenPlaceholder:"Optional",proxyPlaceholder:"Optional; empty uses global proxy/local network",cookiesPlaceholder:"Optional, recommended for signed-in sessions",filterAll:"All accounts",filterHealthy:"Healthy only",filterBackoff:"Backoff only",filterDisabled:"Disabled only",sortDefault:"Default sort",sortFailures:"By failures",sortBindings:"By bindings",sortUpdated:"By recent usage",
-            runtimeStatus:"Runtime",loadStatus:"Account State",boundSessions:"Bound Sessions",lastError:"Last Error",recentFailures:"Recent Failures",actionRequired:"Action",nextRetryAt:"Next Retry",never:"Never",enabled:"Enabled",disabled:"Disabled",usingCookies:"Cookies",manualToken:"Manual Token",hasProxy:"Proxy Set",noProxy:"Local/Global Proxy",tokenReady:"Token Ready",tokenNotReady:"Login Not Ready",backoff:"Backoff",healthy:"Healthy",unbind:"Unbind",rebind:"Rebind",unbindDone:"Binding removed",details:"Details",edit:"Edit",refresh:"Refresh",enable:"Enable",disable:"Disable",delete:"Delete",editModalTitle:"Edit Credentials",editModalHint:"This dialog shows sensitive fields and requires API Key.",saveRepair:"Save Repair",cancel:"Cancel",drawerTitle:"Account Details",drawerSubtitle:"Inspect runtime state, recent failures, and binding count.",timelineTitle:"Recent Failures",close:"Close",deleteConfirm:(id)=>`Delete account ${id}?`,
+            runtimeStatus:"Runtime",loadStatus:"Account State",boundSessions:"Bound Sessions",lastError:"Last Error",recentFailures:"Recent Failures",actionRequired:"Action",nextRetryAt:"Next Retry",never:"Never",enabled:"Enabled",disabled:"Disabled",usingCookies:"Cookies",manualToken:"Manual Token",hasProxy:"Proxy Set",noProxy:"Local/Global Proxy",tokenReady:"Token Ready",tokenNotReady:"Login Not Ready",backoff:"Backoff",healthy:"Healthy",cookieHealth:"Cookie Health",cookieHealthOK:"Important cookies present",cookieHealthMissing:"Important cookies missing",cookieCount:"Cookie Count",abuseTime:"Abuse Exemption Time",abuseAge:"Age",missingCookies:"Missing",checkCookie:"Check Cookie",unbind:"Unbind",rebind:"Rebind",unbindDone:"Binding removed",details:"Details",edit:"Edit",refresh:"Refresh",enable:"Enable",disable:"Disable",delete:"Delete",editModalTitle:"Edit Credentials",editModalHint:"This dialog shows sensitive fields and requires API Key.",saveRepair:"Save Repair",cancel:"Cancel",drawerTitle:"Account Details",drawerSubtitle:"Inspect runtime state, recent failures, and binding count.",timelineTitle:"Recent Failures",close:"Close",deleteConfirm:(id)=>`Delete account ${id}?`,
             bindingItem:(session,account)=>`Session ${session} is bound to ${account}`
           },
           labels:{uptime:"Uptime",uptimeSub:"time online",total:"Total Requests",totalSub:"lifetime volume",success:"Succeeded",fail:"Failed",input:"Input Tokens",inputSub:"cumulative input",output:"Output Tokens",outputSub:"cumulative output",avg:"Avg Tokens",avgSub:"total tokens / total requests",poolTotal:"Accounts",poolTotalSub:"loaded accounts",poolHealthy:"Healthy",poolHealthySub:"currently allocatable",poolBackoff:"Not Ready",poolBackoffSub:"update login cookies",poolDisabled:"Disabled",poolDisabledSub:"manually disabled"}
@@ -396,6 +397,7 @@
       function fmtOne(v){return Number(v||0).toFixed(1)}
       function fmtTime(value){if(!value) return t().texts.never;const d=new Date(value);return Number.isNaN(d.getTime())?t().texts.never:d.toLocaleString(currentLang==="zh"?"zh-CN":"en-US",{hour12:false})}
       function fmtUptime(s){s=Math.max(0,Math.round(s||0));const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),sec=s%60;return currentLang==="zh"?`${d?d+"天 ":""}${h||d?h+"小时 ":""}${m||h||d?m+"分 ":""}${sec}秒`:`${d?d+"d ":""}${h||d?h+"h ":""}${m||h||d?m+"m ":""}${sec}s`}
+      function fmtDuration(seconds){seconds=Math.max(0,Math.round(seconds||0));const d=Math.floor(seconds/86400),h=Math.floor(seconds%86400/3600),m=Math.floor(seconds%3600/60);return currentLang==="zh"?`${d?d+"天 ":""}${h?h+"小时 ":""}${!d&&m?m+"分":""}`.trim()||"0分":`${d?d+"d ":""}${h?h+"h ":""}${!d&&m?m+"m":""}`.trim()||"0m"}
 
       function applyLanguage(){
         document.title=t().title;
@@ -510,6 +512,8 @@
         state.activeAccountID=accountID;
         writeStored(storageKeys.activeAccount,state.activeAccountID);
         highlightAccount(accountID);
+        const health=state.cookieHealth[accountID];
+        const healthDetails=renderCookieHealthDetails(health);
         const details=qs("#drawerDetails");
         details.innerHTML=`
           <div class="detail"><strong>ID</strong><span>${account.id}</span></div>
@@ -525,6 +529,7 @@
           <div class="detail full"><strong>${t().texts.nextRetryAt}</strong><span>${fmtTime(account.next_retry_at)}</span></div>
           <div class="detail full"><strong>Last Used</strong><span>${fmtTime(account.last_used_at)}</span></div>
           <div class="detail full"><strong>Last Refresh</strong><span>${fmtTime(account.last_token_refresh_at)}</span></div>
+          ${healthDetails}
         `;
         const timeline=qs("#drawerTimeline");
         const failures=account.recent_failures||[];
@@ -532,6 +537,43 @@
         qs("#accountDrawer").classList.add("open");
         qs("#drawerBackdrop").classList.add("open");
         qs("#accountDrawer").setAttribute("aria-hidden","false");
+      }
+
+      function renderCookieHealthSummary(accountID){
+        const health=state.cookieHealth[accountID];
+        if(!health) return "";
+        const c=t().texts;
+        const missing=health.important_missing||[];
+        const statusClass=missing.length?"warn":"ok";
+        const title=missing.length?c.cookieHealthMissing:c.cookieHealthOK;
+        const abuse=health.abuse_exemption||{};
+        const abuseText=abuse.value_seen&&abuse.time?`${c.abuseTime}: ${fmtTime(abuse.time)} · ${c.abuseAge}: ${fmtDuration(abuse.age_sec)}`:`${c.abuseTime}: ${c.never}`;
+        return `<div class="cookie-health ${statusClass}"><strong>${c.cookieHealth} · ${title}</strong><span>${c.cookieCount}: ${health.cookie_count||0}</span><span>${abuseText}</span>${missing.length?`<span>${c.missingCookies}: ${missing.join(", ")}</span>`:""}</div>`;
+      }
+
+      function renderCookieHealthDetails(health){
+        if(!health) return `<div class="detail full"><strong>${t().texts.cookieHealth}</strong><span>${t().texts.never}</span></div>`;
+        const c=t().texts;
+        const missing=health.important_missing||[];
+        const abuse=health.abuse_exemption||{};
+        const opaque=(health.opaque_session_cookies||[]).join(", ")||c.never;
+        return `
+          <div class="detail full"><strong>${c.cookieHealth}</strong><span>${missing.length?c.cookieHealthMissing:c.cookieHealthOK}</span></div>
+          <div class="detail"><strong>${c.cookieCount}</strong><span>${health.cookie_count||0}</span></div>
+          <div class="detail"><strong>${c.abuseAge}</strong><span>${abuse.value_seen?fmtDuration(abuse.age_sec):c.never}</span></div>
+          <div class="detail full"><strong>${c.abuseTime}</strong><span>${abuse.time?fmtTime(abuse.time):c.never}</span></div>
+          <div class="detail full"><strong>${c.missingCookies}</strong><span>${missing.length?missing.join(", "):c.never}</span></div>
+          <div class="detail full"><strong>Opaque Session Cookies</strong><span>${opaque}</span></div>
+        `;
+      }
+
+      async function checkCookieHealth(accountID){
+        const health=await requestJSON(`/api/accounts/${encodeURIComponent(accountID)}/cookie-health`,{method:"GET"});
+        state.cookieHealth[accountID]=health;
+        renderAccounts();
+        if(state.activeAccountID===accountID && qs("#accountDrawer").classList.contains("open")) openAccountDrawer(accountID);
+        const missing=health.important_missing||[];
+        showToast(missing.length?"err":"ok",t().texts.cookieHealth,missing.length?`${t().texts.missingCookies}: ${missing.join(", ")}`:t().texts.cookieHealthOK);
       }
 
       function closeAccountDrawer(){
@@ -625,10 +667,12 @@
                 <button class="btn" type="button" data-details="${account.id}">${t().texts.details}</button>
                 <button class="btn" type="button" data-edit="${account.id}">${t().texts.edit}</button>
                 <button class="btn" type="button" data-refresh="${account.id}">${t().texts.refresh}</button>
+                <button class="btn" type="button" data-cookie-health="${account.id}">${t().texts.checkCookie}</button>
                 <button class="btn" type="button" data-toggle="${account.id}" data-enabled="${account.enabled}">${account.enabled?t().texts.disable:t().texts.enable}</button>
                 <button class="btn danger" type="button" data-delete="${account.id}">${t().texts.delete}</button>
               </div>
             </div>
+            ${renderCookieHealthSummary(account.id)}
             <div class="failures">${(account.recent_failures||[]).length?(account.recent_failures||[]).map(item=>`<div class="failure"><strong>${item.label||item.code||t().texts.recentFailures}</strong><span>${item.reason}</span><span>${item.action||""}</span><span>${fmtTime(item.at)}</span></div>`).join(""):`<div class="failure"><strong>${t().texts.recentFailures}</strong><span>${t().texts.never}</span></div>`}</div>
           </article>
         `).join("");
@@ -781,6 +825,7 @@
         const toggleID=target.dataset.toggle;
         const deleteID=target.dataset.delete;
         const detailsID=target.dataset.details;
+        const cookieHealthID=target.dataset.cookieHealth;
         try{
           if(detailsID){
             openAccountDrawer(detailsID);
@@ -794,6 +839,10 @@
             await requestJSON(`/api/accounts/${encodeURIComponent(refreshID)}/refresh`,{method:"POST"});
             showToast("ok",t().texts.refreshSuccess,refreshID);
             await refreshAll();
+            return;
+          }
+          if(cookieHealthID){
+            await checkCookieHealth(cookieHealthID);
             return;
           }
           if(toggleID){

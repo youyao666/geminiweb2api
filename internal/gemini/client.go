@@ -588,10 +588,6 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	req.Header.Set("x-goog-ext-73010989-jspb", "[0]")
 	req.Header.Set("x-goog-ext-73010990-jspb", "[0]")
 	req.Header.Set("x-same-domain", "1")
-	randomIP := support.GenerateRandomIP()
-	req.Header.Set("X-Forwarded-For", randomIP)
-	req.Header.Set("X-Real-IP", randomIP)
-	depGetLogger().Debug("正在使用随机 XFF IP: %s", randomIP)
 	return req, nil
 }
 
@@ -673,7 +669,9 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 			} else {
 				depGetLogger().Error("Gemini API 请求失败: %v", err)
 			}
-			depTokens.MarkAccountFailure(accountID, err.Error())
+			if !isTransientNetworkError(err) {
+				depTokens.MarkAccountFailure(accountID, err.Error())
+			}
 			lastErr = err.Error()
 			mapped := OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "upstream_connection_error", Message: err.Error()}
 			lastMappedErr = &mapped
@@ -918,7 +916,9 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 
 		body, err := readResponseBody(resp, "非流式")
 		if err != nil {
-			depTokens.MarkAccountFailure(accountID, err.Error())
+			if !isTransientNetworkError(err) {
+				depTokens.MarkAccountFailure(accountID, err.Error())
+			}
 			lastErr = err.Error()
 			mapped := OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "response_read_error", Message: err.Error()}
 			lastMappedErr = &mapped
@@ -1042,6 +1042,18 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func isTransientNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "client.timeout") ||
+		strings.Contains(lower, "timeout awaiting response headers") ||
+		strings.Contains(lower, "i/o timeout") ||
+		strings.Contains(lower, "unexpected eof")
 }
 
 func updateSessionFromResponse(session *GeminiSession, body string) {

@@ -1,13 +1,16 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"main/internal/config"
+	"main/internal/token"
 )
 
 func newTestServer(t *testing.T, publicAccountStatus bool) *Server {
@@ -96,5 +99,73 @@ func TestHandleAccountsAllowsPublicStatusWhenConfigured(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestHandleModelsUses3SeriesDefaults(t *testing.T) {
+	s := newTestServer(t, false)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	s.handleModels(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal models response: %v", err)
+	}
+
+	got := make([]string, 0, len(resp.Data))
+	for _, model := range resp.Data {
+		got = append(got, model.ID)
+	}
+	expected := []string{"gemini-3-pro", "gemini-3-flash"}
+	if len(got) != len(expected) {
+		t.Fatalf("expected %d models, got %d: %v", len(expected), len(got), got)
+	}
+	for i := range expected {
+		if got[i] != expected[i] {
+			t.Fatalf("expected models %v, got %v", expected, got)
+		}
+	}
+}
+
+func TestPersistentStateRestoresAccountTokenSnapshots(t *testing.T) {
+	s := newTestServer(t, false)
+
+	s.tokenManager.RestoreTokenSnapshots(map[string]token.AccountTokenSnapshot{
+		"__default__": {
+			SNlM0e:    "persisted-token",
+			BLToken:   "persisted-bl",
+			FSID:      "persisted-fsid",
+			ReqID:     12345,
+			FetchedAt: time.Now().UTC().Truncate(time.Second),
+		},
+	})
+	s.savePersistentState()
+
+	reloaded, err := New(s.configStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	accounts := reloaded.tokenManager.TokenSnapshots()
+	snapshot, ok := accounts["__default__"]
+	if !ok {
+		t.Fatal("expected persisted token snapshot to load")
+	}
+	if snapshot.SNlM0e != "persisted-token" || snapshot.BLToken != "persisted-bl" || snapshot.FSID != "persisted-fsid" {
+		t.Fatalf("unexpected restored snapshot: %+v", snapshot)
+	}
+	if snapshot.ReqID != 12345 {
+		t.Fatalf("expected req id 12345, got %d", snapshot.ReqID)
 	}
 }
