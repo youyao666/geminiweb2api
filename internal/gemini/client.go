@@ -784,7 +784,7 @@ func extractJSONObjectCandidates(s string) []string {
 	return result
 }
 
-func buildGeminiRequest(prompt string, session *GeminiSession, modelName string, accountCtx AccountContext) (*http.Request, error) {
+func buildGeminiRequest(prompt string, images []ImageData, session *GeminiSession, modelName string, accountCtx AccountContext) (*http.Request, error) {
 
 	uuidVal := strings.ToUpper(support.GenerateUUIDv4())
 	spec := modelSpecMap["gemini-3-flash"]
@@ -930,7 +930,7 @@ func buildGeminiRequestURL(rawURL string, accountCtx AccountContext) (string, er
 	return parsedURL.String(), nil
 }
 
-func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, streamOptions *StreamOptions, writeError func(http.ResponseWriter, int, string), writeMappedError func(http.ResponseWriter, OpenAIError)) {
+func HandleStreamResponse(w http.ResponseWriter, prompt string, images []ImageData, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, streamOptions *StreamOptions, writeError func(http.ResponseWriter, int, string), writeMappedError func(http.ResponseWriter, OpenAIError)) {
 	start := time.Now()
 	const maxRetries = 3
 	var bodyStr, content, lastErr string
@@ -962,7 +962,7 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 			ReqID:   selected.ReqID,
 		}
 
-		req, err := buildGeminiRequest(prompt, session, model, accountCtx)
+		req, err := buildGeminiRequest(prompt, images, session, model, accountCtx)
 		if err != nil {
 			depGetLogger().Error("构建 Gemini 请求失败: %v", err)
 			depTokens.MarkAccountFailure(accountID, err.Error())
@@ -1306,7 +1306,7 @@ func pollDeepThinkResult(session *GeminiSession, modelName string, accountCtx Ac
 	return "", "", fmt.Errorf("deep think polling timed out after %d attempts, last body preview: %.200s", maxPolls, lastBody)
 }
 
-func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, writeError func(http.ResponseWriter, int, string), writeMappedError func(http.ResponseWriter, OpenAIError), writeJSON func(http.ResponseWriter, int, interface{})) {
+func HandleNonStreamResponse(w http.ResponseWriter, prompt string, images []ImageData, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, writeError func(http.ResponseWriter, int, string), writeMappedError func(http.ResponseWriter, OpenAIError), writeJSON func(http.ResponseWriter, int, interface{})) {
 	start := time.Now()
 	const maxRetries = 3
 	var bodyStr, content, lastErr string
@@ -1339,7 +1339,7 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 			ReqID:   selected.ReqID,
 		}
 
-		req, err := buildGeminiRequest(prompt, session, model, accountCtx)
+		req, err := buildGeminiRequest(prompt, images, session, model, accountCtx)
 		if err != nil {
 			depGetLogger().Error("构建 Gemini 请求失败: %v", err)
 			depTokens.MarkAccountFailure(accountID, err.Error())

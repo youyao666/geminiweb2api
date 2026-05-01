@@ -21,6 +21,12 @@ import (
 	"main/internal/web"
 )
 
+var (
+	buildPromptWithMedia   = gemini.BuildPromptWithMedia
+	handleStreamResponse    = gemini.HandleStreamResponse
+	handleNonStreamResponse = gemini.HandleNonStreamResponse
+)
+
 type Server struct {
 	configStore *config.Store
 	metrics     *metrics.Metrics
@@ -949,18 +955,18 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	snlm0eToken, _ := s.tokenManager.GetTokenForSession(sessionKey, isNewSession)
-	prompt := gemini.BuildPrompt(req)
+	prompt, images := buildPromptWithMedia(req)
 
 	if req.Stream {
 		s.Logger().Debug("开始流式响应")
 		s.recordDiscoveredModel(req.Model)
-		gemini.HandleStreamResponse(w, prompt, req.Model, session, req.Tools, sessionKey, snlm0eToken, req.StreamOptions, s.writeError, s.writeMappedError)
+		handleStreamResponse(w, prompt, images, req.Model, session, req.Tools, sessionKey, snlm0eToken, req.StreamOptions, s.writeError, s.writeMappedError)
 		s.savePersistentState()
 		return
 	}
 
 	s.Logger().Debug("开始非流式响应")
 	s.recordDiscoveredModel(req.Model)
-	gemini.HandleNonStreamResponse(w, prompt, req.Model, session, req.Tools, sessionKey, snlm0eToken, s.writeError, s.writeMappedError, s.writeJSON)
+	handleNonStreamResponse(w, prompt, images, req.Model, session, req.Tools, sessionKey, snlm0eToken, s.writeError, s.writeMappedError, s.writeJSON)
 	s.savePersistentState()
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"main/internal/config"
+	"main/internal/gemini"
 	"main/internal/token"
 )
 
@@ -135,6 +136,58 @@ func TestHandleModelsUses3SeriesDefaults(t *testing.T) {
 		if got[i] != expected[i] {
 			t.Fatalf("expected models %v, got %v", expected, got)
 		}
+	}
+}
+
+func TestHandleChatCompletionsPassesMultimodalContent(t *testing.T) {
+	s := newTestServer(t, false)
+	origBuildPromptWithMedia := buildPromptWithMedia
+	origHandleNonStreamResponse := handleNonStreamResponse
+	defer func() {
+		buildPromptWithMedia = origBuildPromptWithMedia
+		handleNonStreamResponse = origHandleNonStreamResponse
+	}()
+
+	var capturedModel string
+	var capturedPrompt string
+	var capturedImages []gemini.ImageData
+	buildPromptWithMedia = func(req gemini.ChatCompletionRequest) (string, []gemini.ImageData) {
+		capturedModel = req.Model
+		capturedPrompt = "prompt-with-media"
+		capturedImages = []gemini.ImageData{{MimeType: "image/png", Base64: "AAAA", URL: "data:image/png;base64,AAAA"}}
+		return capturedPrompt, capturedImages
+	}
+
+	var called bool
+	handleNonStreamResponse = func(w http.ResponseWriter, prompt string, images []gemini.ImageData, model string, session *gemini.GeminiSession, tools []gemini.Tool, sessionKey string, snlm0eToken string, writeError func(http.ResponseWriter, int, string), writeMappedError func(http.ResponseWriter, gemini.OpenAIError), writeJSON func(http.ResponseWriter, int, interface{})) {
+		called = true
+		if prompt != capturedPrompt {
+			t.Fatalf("expected prompt %q, got %q", capturedPrompt, prompt)
+		}
+		if model != "gemini-3-pro" {
+			t.Fatalf("expected normalized model, got %q", model)
+		}
+		if len(images) != 1 || images[0].MimeType != "image/png" {
+			t.Fatalf("expected images to be passed through, got %+v", images)
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+
+	reqBody := `{"model":"gemini-3-pro","messages":[{"role":"user","content":[{"type":"text","text":"see attached"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}],"stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	if !called {
+		t.Fatal("expected non-stream handler to be called")
+	}
+	if capturedModel != "gemini-3-pro" {
+		t.Fatalf("expected model to be normalized, got %q", capturedModel)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
 
