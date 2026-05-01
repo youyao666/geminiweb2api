@@ -278,3 +278,87 @@ func TestDownloadImageAsBase64(t *testing.T) {
 	if image.URL != server.URL {
 		t.Fatalf("unexpected url: %s", image.URL)
 	}
+}
+
+func TestBuildPromptWithMedia_TextOnlyMatchesBuildPrompt(t *testing.T) {
+	req := ChatCompletionRequest{
+		Messages: []Message{{Role: "user", Content: "hello"}},
+	}
+
+	legacy := BuildPrompt(req)
+	prompt, images := BuildPromptWithMedia(req)
+
+	if prompt != legacy {
+		t.Fatalf("expected text prompt to match legacy output, got %q vs %q", prompt, legacy)
+	}
+	if len(images) != 0 {
+		t.Fatalf("expected no images, got %d", len(images))
+	}
+}
+
+func TestBuildPromptWithMedia_CollectsImages(t *testing.T) {
+	req := ChatCompletionRequest{
+		Messages: []Message{{
+			Role: "user",
+			Content: []interface{}{
+				map[string]interface{}{"type": "text", "text": "see attached"},
+				map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "data:image/png;base64,AAAA"}},
+			},
+		}},
+	}
+
+	prompt, images := BuildPromptWithMedia(req)
+
+	if !strings.Contains(prompt, "User: see attached") {
+		t.Fatalf("unexpected prompt: %s", prompt)
+	}
+	if len(images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(images))
+	}
+	if images[0].MimeType != "image/png" || images[0].Base64 != "AAAA" {
+		t.Fatalf("unexpected image: %+v", images[0])
+	}
+}
+
+func TestGetExperimentalFeatureMode(t *testing.T) {
+	tests := []struct {
+		model string
+		want  int
+		ok    bool
+	}{
+		{model: "gemini-3-pro-image", want: featureModeImage, ok: true},
+		{model: "gemini-3-pro-video", want: featureModeVideo, ok: true},
+		{model: "gemini-3-pro", want: 0, ok: false},
+	}
+
+	for _, tt := range tests {
+		got, ok := getExperimentalFeatureMode(tt.model)
+		if got != tt.want || ok != tt.ok {
+			t.Fatalf("model %s => (%d,%v), want (%d,%v)", tt.model, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestGetExperimentalRequestConfig(t *testing.T) {
+	imageCfg, ok := getExperimentalRequestConfig("gemini-3-pro-image")
+	if !ok {
+		t.Fatal("expected image experimental config")
+	}
+	if imageCfg.FeatureMode != featureModeImage || imageCfg.Ef != featureModeImage || imageCfg.Xpc != "MODE_CATEGORY_FAST" {
+		t.Fatalf("unexpected image config: %+v", imageCfg)
+	}
+	if imageCfg.Lo == nil || *imageCfg.Lo {
+		t.Fatalf("expected image Lo=false, got %+v", imageCfg.Lo)
+	}
+
+	videoCfg, ok := getExperimentalRequestConfig("gemini-3-pro-video")
+	if !ok {
+		t.Fatal("expected video experimental config")
+	}
+	if videoCfg.FeatureMode != featureModeVideo || videoCfg.Ef != featureModeVideo || videoCfg.Xpc != "MODE_CATEGORY_FAST" {
+		t.Fatalf("unexpected video config: %+v", videoCfg)
+	}
+	if videoCfg.Lo == nil || *videoCfg.Lo {
+		t.Fatalf("expected video Lo=false, got %+v", videoCfg.Lo)
+	}
+}

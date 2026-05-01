@@ -301,11 +301,21 @@ const (
 	thinkingLevelDeepThink = 3
 
 	featureModeDeepThink = 20
+	featureModeVideo     = 11
+	featureModeImage     = 14
 )
 
 type webModelSpec struct {
 	HexID    string
 	Capacity int
+}
+
+type experimentalRequestConfig struct {
+	FeatureMode   int
+	ThinkingLevel int
+	Ef            int
+	Xpc           string
+	Lo            *bool
 }
 
 var modelSpecMap = map[string]webModelSpec{
@@ -320,6 +330,8 @@ var modelSpecMap = map[string]webModelSpec{
 	"gemini-pro":                   {"9d8ca3786ebdfbea", 1},
 	"gemini-2.5-pro":               {"9d8ca3786ebdfbea", 1},
 	"gemini-3-pro-deep-think":      {"e6fa609c3fa255c0", 4},
+	"gemini-3-pro-image":           {"e6fa609c3fa255c0", 4},
+	"gemini-3-pro-video":           {"e6fa609c3fa255c0", 4},
 	"gemini-3-pro-plus":            {"e6fa609c3fa255c0", 4},
 	"gemini-3-pro-advanced":        {"e6fa609c3fa255c0", 2},
 	"gemini-3.1":                   {"e6fa609c3fa255c0", 2},
@@ -508,14 +520,24 @@ func buildToolsPrompt(tools []Tool) string {
 }
 
 func BuildPrompt(req ChatCompletionRequest) string {
+	prompt, _ := BuildPromptWithMedia(req)
+	return prompt
+}
+
+func BuildPromptWithMedia(req ChatCompletionRequest) (string, []ImageData) {
 	var prompt strings.Builder
+	var images []ImageData
 	toolsPrompt := buildToolsPrompt(req.Tools)
 	if toolsPrompt != "" {
 		prompt.WriteString(toolsPrompt)
 		prompt.WriteString("\n---\n\n")
 	}
 	for _, msg := range req.Messages {
-		content := extractMessageContent(msg)
+		parsed := extractMultimodalContent(msg)
+		if len(parsed.Images) > 0 {
+			images = append(images, parsed.Images...)
+		}
+		content := parsed.Text
 		switch msg.Role {
 		case "system":
 			prompt.WriteString(fmt.Sprintf("[System Instruction]\n%s\n[/System Instruction]\n\n", content))
@@ -533,7 +555,7 @@ func BuildPrompt(req ChatCompletionRequest) string {
 			prompt.WriteString(fmt.Sprintf("Tool Result [%s]: %s\n\n", msg.ToolCallID, content))
 		}
 	}
-	return prompt.String()
+	return prompt.String(), images
 }
 
 func isDeepThinkAlias(modelName string) bool {
@@ -566,6 +588,42 @@ func getThinkingLevel(modelName string) (int, int, bool) {
 		return thinkingLevelExtended, 0, true
 	default:
 		return 0, 0, false
+	}
+}
+
+func getExperimentalFeatureMode(modelName string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(modelName)) {
+	case "gemini-3-pro-image":
+		return featureModeImage, true
+	case "gemini-3-pro-video":
+		return featureModeVideo, true
+	default:
+		return 0, false
+	}
+}
+
+func getExperimentalRequestConfig(modelName string) (experimentalRequestConfig, bool) {
+	switch strings.ToLower(strings.TrimSpace(modelName)) {
+	case "gemini-3-pro-image":
+		lo := false
+		return experimentalRequestConfig{
+			FeatureMode:   featureModeImage,
+			ThinkingLevel: 5,
+			Ef:            featureModeImage,
+			Xpc:           "MODE_CATEGORY_FAST",
+			Lo:            &lo,
+		}, true
+	case "gemini-3-pro-video":
+		lo := false
+		return experimentalRequestConfig{
+			FeatureMode:   featureModeVideo,
+			ThinkingLevel: 5,
+			Ef:            featureModeVideo,
+			Xpc:           "MODE_CATEGORY_FAST",
+			Lo:            &lo,
+		}, true
+	default:
+		return experimentalRequestConfig{}, false
 	}
 }
 
@@ -753,6 +811,7 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 
 	// 根据是否为 thinking 模型决定数组长度
 	thinkingLevel, featureMode, needsThinking := getThinkingLevel(modelName)
+	experimentalCfg, hasExperimentalCfg := getExperimentalRequestConfig(modelName)
 	reqLen := geminiInnerReqLen
 	if needsThinking {
 		reqLen = geminiInnerReqLenThinking
@@ -782,6 +841,10 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 		}
 		inner[idxThinkingLevel] = thinkingLevel
 		depGetLogger().Debug("已设置 thinking 协议字段: level=%d, featureMode=%d, reqLen=%d", thinkingLevel, featureMode, reqLen)
+	} else if hasExperimentalCfg {
+		inner[idxFeatureMode] = experimentalCfg.FeatureMode
+		inner[idxThinkingLevel] = experimentalCfg.ThinkingLevel
+		depGetLogger().Debug("已设置实验工具字段: featureMode=%d, ef=%d, xpc=%s", experimentalCfg.FeatureMode, experimentalCfg.Ef, experimentalCfg.Xpc)
 	}
 
 	innerJSON, err := json.Marshal(inner)
