@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -82,5 +83,108 @@ func TestParseToolCalls_IgnoreUnknownAndDeduplicate(t *testing.T) {
 	}
 	if !strings.Contains(clean, "unknown_tool") {
 		t.Fatalf("unknown tool should be preserved in content, got: %s", clean)
+	}
+}
+
+func TestExtractDeepThinkContent(t *testing.T) {
+	rcNode := []interface{}{
+		"rc_testid",
+		[]interface{}{"placeholder text"},
+		nil, nil, nil, nil, nil,
+		[]interface{}{1},
+		"zh",
+		nil, nil,
+		nil,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		[]interface{}{false},
+		nil, nil, nil, nil, nil, nil,
+		[]interface{}{},
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		[]interface{}{
+			[]interface{}{"**Step One**\n\nFirst thinking step.\n\n\n**Step Two**\n\nSecond thinking step.\n\n\n"},
+			[]interface{}{
+				[]interface{}{
+					"**Step One**\n\nFirst thinking step.\n\n\n**Step Two**\n\nSecond thinking step.\n\n\n",
+					"", "",
+					[]interface{}{
+						[]interface{}{nil, []interface{}{nil, 0, "Step One", nil}},
+						[]interface{}{nil, []interface{}{nil, 0, "First thinking step."}},
+						[]interface{}{nil, []interface{}{nil, 0, "Step Two", nil}},
+						[]interface{}{nil, []interface{}{nil, 0, "Second thinking step."}},
+					},
+				},
+			},
+		},
+	}
+
+	inner := []interface{}{
+		[]interface{}{rcNode},
+		nil, nil,
+		"rc_testid",
+	}
+
+	innerJSON, err := json.Marshal(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result contentResult
+	visitRCNodesV2(inner, &result)
+
+	if result.Content == "" {
+		t.Fatal("expected non-empty content")
+	}
+	if !strings.Contains(result.Content, "placeholder") {
+		t.Fatalf("unexpected content: %s", result.Content)
+	}
+	if result.ReasoningContent == "" {
+		t.Fatalf("expected non-empty reasoning content. rcNode len=%d, innerJSON=%s", len(rcNode), string(innerJSON))
+	}
+	if !strings.Contains(result.ReasoningContent, "Step One") {
+		t.Fatalf("expected 'Step One' in reasoning, got: %s", result.ReasoningContent)
+	}
+	if !strings.Contains(result.ReasoningContent, "Step Two") {
+		t.Fatalf("expected 'Step Two' in reasoning, got: %s", result.ReasoningContent)
+	}
+}
+
+func TestExtractThinkingFromRCNode(t *testing.T) {
+	payload := `["rc_test",["placeholder"],null,null,null,null,null,null,null,[1],"zh",null,null,null,null,null,null,null,null,null,null,null,[false],null,null,null,null,null,null,[],null,null,null,null,null,null,null,null,[["**Step 1**\n\nThinking text here\n\n\n**Step 2**\n\nMore thinking\n\n\n"]]]`
+	var items []interface{}
+	if err := json.Unmarshal([]byte(payload), &items); err != nil {
+		t.Fatal(err)
+	}
+	thinking := extractThinkingFromRCNode(items)
+	if thinking == "" {
+		t.Fatal("expected non-empty thinking content")
+	}
+	if !strings.Contains(thinking, "Step 1") || !strings.Contains(thinking, "Step 2") {
+		t.Fatalf("expected thinking to contain steps, got: %s", thinking)
+	}
+}
+
+func TestExtractThinkingFromRCNode_NoThinking(t *testing.T) {
+	payload := `["rc_test",["hello world"],null,null,null,null,null,null,null,[1],"zh"]`
+	var items []interface{}
+	if err := json.Unmarshal([]byte(payload), &items); err != nil {
+		t.Fatal(err)
+	}
+	thinking := extractThinkingFromRCNode(items)
+	if thinking != "" {
+		t.Fatalf("expected empty thinking for normal response, got: %s", thinking)
+	}
+}
+
+func TestExtractThinkingFromRCNode_IgnoresMetadata(t *testing.T) {
+	items := []interface{}{
+		"rc_4083678137dd176e",
+		[]interface{}{"9.9更大。"},
+		nil,
+		[]interface{}{"rc_4083678137dd176e", "US", "e6fa609c3fa255c0", "e6fa609c3fa255c0", "3.1 Pro"},
+	}
+
+	thinking := extractThinkingFromRCNode(items)
+	if thinking != "" {
+		t.Fatalf("expected metadata to be ignored, got: %s", thinking)
 	}
 }

@@ -121,10 +121,11 @@ type Function struct {
 }
 
 type Message struct {
-	Role       string      `json:"role"`
-	Content    interface{} `json:"content"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Role             string      `json:"role"`
+	Content          interface{} `json:"content"`
+	ReasoningContent string      `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID       string      `json:"tool_call_id,omitempty"`
 }
 
 type ContentPart struct {
@@ -161,9 +162,10 @@ type Choice struct {
 }
 
 type Delta struct {
-	Role      string     `json:"role,omitempty"`
-	Content   string     `json:"content,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Role             string     `json:"role,omitempty"`
+	Content          string     `json:"content,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 }
 
 type Usage struct {
@@ -266,29 +268,21 @@ var errorCodeMap = map[int]string{
 
 const (
 	geminiInnerReqLen          = 69
-	geminiInnerReqLenThinking  = 82
+	geminiInnerReqLenThinking  = 80
 	geminiStreamingFlagIndex   = 7
 	geminiDefaultMetadataSlots = 10
 	geminiWebLanguage          = "zh-CN"
 	headerModelJSPB            = "x-goog-ext-525001261-jspb"
 	headerRequestUUIDJSPB      = "x-goog-ext-525005358-jspb"
 
-	// Deep Think / Thinking 协议字段索引 (JSPB index = protobuf field - 1)
-	idxFeatureMode    = 49 // field 50: Feature Mode (20 = DEEP_THINK)
-	idxModeCategory1  = 75 // field 76: MODE_CATEGORY
-	idxModeCategory2  = 79 // field 80: MODE_CATEGORY (重复位置)
-	idxThinkingLevel  = 80 // field 81: THINKING_LEVEL
+	idxFeatureMode   = 49
+	idxThinkingLevel = 79
 
-	// MODE_CATEGORY 枚举值
-	modeCategoryThinking = 2 // MODE_CATEGORY_THINKING
+	thinkingLevelStandard  = 1
+	thinkingLevelExtended  = 2
+	thinkingLevelDeepThink = 3
 
-	// THINKING_LEVEL 枚举值
-	thinkingLevelStandard = 1 // THINKING_LEVEL_STANDARD
-	thinkingLevelExtended = 2 // THINKING_LEVEL_EXTENDED
-	thinkingLevelDeepThink = 3 // THINKING_LEVEL_DEEP_THINK
-
-	// Feature Mode 枚举值（保留定义，当前不使用以避免异步模式）
-	featureModeDeepThink = 20 // DEEP_THINK
+	featureModeDeepThink = 20
 )
 
 type webModelSpec struct {
@@ -341,7 +335,11 @@ func sessionToGeminiMetadata(snapshot GeminiSessionSnapshot) []interface{} {
 	return m
 }
 
-func buildModelHeaderJSPB(spec webModelSpec) string {
+func buildModelHeaderJSPB(spec webModelSpec, thinkingLevel int, uuidVal string) string {
+	if thinkingLevel > 0 {
+		return fmt.Sprintf(`[1,null,null,null,"%s",null,null,0,[4],null,null,%d,null,null,%d,null,"%s"]`,
+			spec.HexID, thinkingLevel, thinkingLevel, uuidVal)
+	}
 	return fmt.Sprintf(`[1,null,null,null,"%s",null,null,0,[4],null,null,%d]`, spec.HexID, spec.Capacity)
 }
 
@@ -465,7 +463,7 @@ func getThinkingLevel(modelName string) (int, int, bool) {
 	n := strings.ToLower(strings.TrimSpace(modelName))
 	switch n {
 	case "gemini-3-pro-deep-think":
-		return thinkingLevelDeepThink, 0, true
+		return thinkingLevelDeepThink, featureModeDeepThink, true
 	case "gemini-3-flash-thinking":
 		return thinkingLevelStandard, 0, true
 	case "gemini-3-flash-thinking-plus":
@@ -683,13 +681,11 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 
 	// 设置 Deep Think / Thinking 协议字段
 	if needsThinking {
-		inner[idxModeCategory1] = modeCategoryThinking  // field 76 = MODE_CATEGORY_THINKING
-		inner[idxModeCategory2] = modeCategoryThinking  // field 80 = MODE_CATEGORY_THINKING
-		inner[idxThinkingLevel] = thinkingLevel         // field 81 = THINKING_LEVEL
 		if featureMode != 0 {
-			inner[idxFeatureMode] = featureMode         // field 50 = Feature Mode (20 for deep think)
+			inner[idxFeatureMode] = featureMode
 		}
-		depGetLogger().Debug("已设置 thinking 协议字段: level=%d, featureMode=%d", thinkingLevel, featureMode)
+		inner[idxThinkingLevel] = thinkingLevel
+		depGetLogger().Debug("已设置 thinking 协议字段: level=%d, featureMode=%d, reqLen=%d", thinkingLevel, featureMode, reqLen)
 	}
 
 	innerJSON, err := json.Marshal(inner)
@@ -739,7 +735,7 @@ func buildGeminiRequest(prompt string, session *GeminiSession, modelName string,
 	req.Header.Set("sec-fetch-dest", "empty")
 	req.Header.Set("sec-fetch-mode", "cors")
 	req.Header.Set("sec-fetch-site", "same-origin")
-	req.Header.Set(headerModelJSPB, buildModelHeaderJSPB(spec))
+	req.Header.Set(headerModelJSPB, buildModelHeaderJSPB(spec, thinkingLevel, uuidVal))
 	req.Header.Set(headerRequestUUIDJSPB, fmt.Sprintf(`["%s",1]`, uuidVal))
 	req.Header.Set("x-goog-ext-73010989-jspb", "[0]")
 	req.Header.Set("x-goog-ext-73010990-jspb", "[0]")
@@ -851,7 +847,7 @@ func HandleStreamResponse(w http.ResponseWriter, prompt string, model string, se
 			continue
 		}
 
-		streamedBody, streamedContent, err := streamGeminiResponse(w, resp, model, session, tools, streamOptions)
+		streamedBody, streamedContent, err := streamGeminiResponse(w, resp, model, session, tools, streamOptions, accountCtx)
 		if err != nil {
 			depTokens.MarkAccountFailure(accountID, err.Error())
 			lastErr = err.Error()
@@ -1013,10 +1009,149 @@ func sendStreamChunkFinish(w http.ResponseWriter, flusher http.Flusher, model st
 	flusher.Flush()
 }
 
+func sendStreamReasoningChunk(w http.ResponseWriter, flusher http.Flusher, model string, reasoningContent string) {
+	chunk := ChatCompletionResponse{
+		ID:      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
+		Object:  "chat.completion.chunk",
+		Created: time.Now().Unix(),
+		Model:   model,
+		Choices: []Choice{{Index: 0, Delta: &Delta{ReasoningContent: reasoningContent}}},
+	}
+	jsonData, _ := json.Marshal(chunk)
+	w.Write([]byte(fmt.Sprintf("data: %s\n\n", jsonData)))
+	flusher.Flush()
+}
+
+func pollDeepThinkResult(session *GeminiSession, modelName string, accountCtx AccountContext) (string, string, error) {
+	snapshot := session.Snapshot()
+	if snapshot.ConversationID == "" {
+		return "", "", fmt.Errorf("no conversation ID for deep think polling")
+	}
+
+	endpoints := httpclient.CurrentGeminiEndpoints(depGetConfig())
+	baseURL := strings.Replace(endpoints.URL, "/assistant.lamda.BardFrontendService/StreamGenerate", "/batchexecute", 1)
+	if baseURL == endpoints.URL {
+		baseURL = strings.Replace(endpoints.URL, "StreamGenerate", "batchexecute", 1)
+	}
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		return "", "", fmt.Errorf("parse batchexecute URL: %w", err)
+	}
+
+	currentToken := accountCtx.Token
+	if currentToken == "" {
+		currentToken = depTokens.GetToken()
+	}
+
+	convID := snapshot.ConversationID
+	freqPayload := fmt.Sprintf(`[\"%s\",10,null,1,[0],[4],null,1]`, convID)
+	freqData := fmt.Sprintf(`[[["hNvQHb","%s",null,"generic"]]]`, freqPayload)
+
+	query := parsedURL.Query()
+	query.Set("rpcids", "hNvQHb")
+	query.Set("source-path", fmt.Sprintf("/app/%s", strings.TrimPrefix(convID, "c_")))
+	query.Set("hl", "en-GB")
+	query.Set("rt", "c")
+	if blToken := firstNonEmpty(accountCtx.BLToken, depTokens.GetBLToken()); blToken != "" {
+		query.Set("bl", blToken)
+	}
+	if fsid := firstNonEmpty(accountCtx.FSID, depTokens.GetFSID()); fsid != "" {
+		query.Set("f.sid", fsid)
+	}
+	query.Set("_reqid", firstNonEmpty(accountCtx.ReqID, depTokens.NextReqID()))
+	parsedURL.RawQuery = query.Encode()
+
+	maxPolls := 30
+	interval := 3
+	var lastBody string
+
+	for i := 0; i < maxPolls; i++ {
+		time.Sleep(time.Duration(interval) * time.Second)
+		interval += 2
+		if interval > 15 {
+			interval = 15
+		}
+
+		depGetLogger().Debug("Deep Think 轮询 %d/%d, convID=%s", i+1, maxPolls, convID)
+
+		postData := url.Values{}
+		postData.Set("f.req", freqData)
+		postData.Set("at", currentToken)
+		req, err := http.NewRequest("POST", parsedURL.String(), strings.NewReader(postData.Encode()))
+		if err != nil {
+			return "", "", fmt.Errorf("create poll request: %w", err)
+		}
+
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+		req.Header.Set("accept-language", "zh-CN")
+		if accountCtx.Cookies != "" {
+			req.Header.Set("Cookie", accountCtx.Cookies)
+		} else if cfg := depGetConfig(); cfg.Cookies != "" {
+			req.Header.Set("Cookie", cfg.Cookies)
+		}
+		req.Header.Set("cache-control", "no-cache")
+		req.Header.Set("origin", endpoints.Origin)
+		req.Header.Set("pragma", "no-cache")
+		req.Header.Set("priority", "u=1, i")
+		req.Header.Set("referer", endpoints.Referer)
+		req.Header.Set("sec-ch-ua", `"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"`)
+		req.Header.Set("sec-ch-ua-arch", `"x86"`)
+		req.Header.Set("sec-ch-ua-bitness", `"64"`)
+		req.Header.Set("sec-ch-ua-form-factors", `"Desktop"`)
+		req.Header.Set("sec-ch-ua-full-version", `"146.0.7680.179"`)
+		req.Header.Set("sec-ch-ua-full-version-list", `"Chromium";v="146.0.7680.179", "Not-A.Brand";v="24.0.0.0", "Google Chrome";v="146.0.7680.179"`)
+		req.Header.Set("sec-ch-ua-mobile", "?0")
+		req.Header.Set("sec-ch-ua-model", `""`)
+		req.Header.Set("sec-ch-ua-platform", `"Windows"`)
+		req.Header.Set("sec-ch-ua-platform-version", `"19.0.0"`)
+		req.Header.Set("sec-ch-ua-wow64", "?0")
+		req.Header.Set("sec-fetch-dest", "empty")
+		req.Header.Set("sec-fetch-mode", "cors")
+		req.Header.Set("sec-fetch-site", "same-origin")
+		req.Header.Set(headerRequestUUIDJSPB, fmt.Sprintf(`["%s",1]`, strings.ToUpper(support.GenerateUUIDv4())))
+		req.Header.Set("x-goog-ext-73010989-jspb", "[0]")
+		req.Header.Set("x-goog-ext-73010990-jspb", "[0]")
+		req.Header.Set("x-same-domain", "1")
+
+		resp, err := httpClientForAccount(accountCtx).Do(req)
+		if err != nil {
+			depGetLogger().Warn("Deep Think 轮询请求失败: %v", err)
+			continue
+		}
+
+		body, err := readResponseBody(resp, "Deep Think 轮询")
+		if err != nil {
+			resp.Body.Close()
+			continue
+		}
+		lastBody = string(body)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			depGetLogger().Warn("Deep Think 轮询返回异常状态码: %d, body preview: %.200s", resp.StatusCode, lastBody)
+			continue
+		}
+
+		result := extractFinalContentWithThinking(lastBody)
+		content := filterContent(result.Content)
+
+		if content != "" && !isDeepThinkPlaceholder(content) && !strings.Contains(content, "I'm on it") {
+			reasoning := result.ReasoningContent
+			depGetLogger().Info("Deep Think 轮询成功, 内容长度=%d, 推理长度=%d, 轮询次数=%d", len(content), len(reasoning), i+1)
+			return content, reasoning, nil
+		}
+
+		depGetLogger().Debug("Deep Think 轮询 %d: 内容仍为占位符或为空", i+1)
+	}
+
+	return "", "", fmt.Errorf("deep think polling timed out after %d attempts, last body preview: %.200s", maxPolls, lastBody)
+}
+
 func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string, session *GeminiSession, tools []Tool, sessionKey string, snlm0eToken string, writeError func(http.ResponseWriter, int, string), writeMappedError func(http.ResponseWriter, OpenAIError), writeJSON func(http.ResponseWriter, int, interface{})) {
 	start := time.Now()
 	const maxRetries = 3
 	var bodyStr, content, lastErr string
+	var reasoningContent string
 	var lastMappedErr *OpenAIError
 	var accountID string
 
@@ -1108,8 +1243,20 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 			continue
 		}
 
-		content = extractFinalContent(bodyStr)
-		content = filterContent(content)
+		result := extractFinalContentWithThinking(bodyStr)
+		content = filterContent(result.Content)
+		reasoningContent = result.ReasoningContent
+
+		if isDeepThinkPlaceholder(result.Content) && isDeepThinkAlias(model) {
+			updateSessionFromResponse(session, bodyStr)
+			polledContent, polledReasoning, pollErr := pollDeepThinkResult(session, model, accountCtx)
+			if pollErr != nil {
+				depGetLogger().Warn("Deep Think 轮询失败: %v", pollErr)
+			} else {
+				content = polledContent
+				reasoningContent = polledReasoning
+			}
+		}
 
 		if content == "" {
 			if code, msg := parseGeminiErrorCode(bodyStr); code != 0 {
@@ -1175,9 +1322,10 @@ func HandleNonStreamResponse(w http.ResponseWriter, prompt string, model string,
 		Choices: []Choice{{
 			Index: 0,
 			Message: &Message{
-				Role:      "assistant",
-				Content:   cleanContent,
-				ToolCalls: toolCalls,
+				Role:             "assistant",
+				Content:          cleanContent,
+				ReasoningContent: reasoningContent,
+				ToolCalls:        toolCalls,
 			},
 			FinishReason: &finishReason,
 		}},
@@ -1218,17 +1366,17 @@ func updateSessionFromResponse(session *GeminiSession, body string) {
 	}
 
 	snapshot := session.Snapshot()
-	convRe := regexp.MustCompile(`"c_([a-f0-9]+)"`)
+	convRe := regexp.MustCompile(`\\?"c_([a-f0-9]+)\\?"`)
 	if matches := convRe.FindStringSubmatch(body); len(matches) > 1 {
 		snapshot.ConversationID = "c_" + matches[1]
 	}
 
-	respRe := regexp.MustCompile(`"r_([a-f0-9]+)"`)
+	respRe := regexp.MustCompile(`\\?"r_([a-f0-9]+)\\?"`)
 	if matches := respRe.FindStringSubmatch(body); len(matches) > 1 {
 		snapshot.ResponseID = "r_" + matches[1]
 	}
 
-	choiceRe := regexp.MustCompile(`"rc_([a-f0-9]+)"`)
+	choiceRe := regexp.MustCompile(`\\?"rc_([a-f0-9]+)\\?"`)
 	if matches := choiceRe.FindStringSubmatch(body); len(matches) > 1 {
 		snapshot.ChoiceID = "rc_" + matches[1]
 	}
@@ -1242,132 +1390,6 @@ func updateSessionFromResponse(session *GeminiSession, body string) {
 
 	if snapshot.ConversationID != "" {
 		depGetLogger().Debug("会话已更新: c=%s, r=%s, rc=%s", snapshot.ConversationID, snapshot.ResponseID, snapshot.ChoiceID)
-	}
-}
-
-func extractFinalContent(body string) string {
-	if content := extractContentFromWrbFrames(body); content != "" {
-		return content
-	}
-
-	var contents []string
-	patterns := []struct {
-		startPattern string
-		arrPattern   string
-		escaped      bool
-	}{
-		{`"rc_`, `",["`, false},
-		{`\"rc_`, `\",[\"`, true},
-	}
-
-	for _, p := range patterns {
-		idx := 0
-		for {
-			start := strings.Index(body[idx:], p.startPattern)
-			if start == -1 {
-				break
-			}
-			start += idx
-			arrStart := strings.Index(body[start:], p.arrPattern)
-			if arrStart == -1 {
-				idx = start + len(p.startPattern)
-				continue
-			}
-			if p.escaped {
-				arrStart += start + len(p.arrPattern)
-				endPos := strings.Index(body[arrStart:], `"]`)
-				if endPos == -1 {
-					idx = arrStart
-					continue
-				}
-				content := body[arrStart : arrStart+endPos]
-				if content != "" {
-					contents = append(contents, content)
-				}
-				idx = arrStart + endPos + 2
-			} else {
-				arrStart += start + len(p.arrPattern)
-				content, endPos := extractQuotedString(body[arrStart:])
-				if content != "" {
-					contents = append(contents, content)
-				}
-				idx = arrStart + endPos + 1
-			}
-		}
-	}
-
-	jsonArrayRe := regexp.MustCompile(`\[\s*"rc_[a-f0-9]+"\s*,\s*\[\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*\]`)
-	matches := jsonArrayRe.FindAllStringSubmatch(body, -1)
-	for _, match := range matches {
-		if len(match) > 1 && match[1] != "" {
-			contents = append(contents, match[1])
-		}
-	}
-
-	return assembleContentFragments(contents)
-}
-
-func extractContentFromWrbFrames(body string) string {
-	lines := strings.Split(body, "\n")
-	best := ""
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "[[") {
-			continue
-		}
-
-		var frames []interface{}
-		if err := json.Unmarshal([]byte(line), &frames); err != nil {
-			continue
-		}
-
-		for _, frame := range frames {
-			frameItems, ok := frame.([]interface{})
-			if !ok || len(frameItems) < 3 {
-				continue
-			}
-
-			eventName, _ := frameItems[0].(string)
-			if eventName != "wrb.fr" {
-				continue
-			}
-
-			payload, _ := frameItems[2].(string)
-			if payload == "" {
-				continue
-			}
-
-			candidate := extractContentFromPayload(payload)
-			if len(candidate) > len(best) {
-				best = candidate
-			}
-		}
-	}
-
-	return best
-}
-
-func extractContentFromPayload(payload string) string {
-	var data interface{}
-	if err := json.Unmarshal([]byte(payload), &data); err != nil {
-		return ""
-	}
-
-	best := ""
-	visitRCNodes(data, &best)
-	return strings.TrimSpace(best)
-}
-
-func visitRCNodes(node interface{}, best *string) {
-	switch value := node.(type) {
-	case []interface{}:
-		if text, ok := extractRCText(value); ok && len(text) > len(*best) {
-			*best = text
-		}
-		for _, item := range value {
-			visitRCNodes(item, best)
-		}
 	}
 }
 
@@ -1527,6 +1549,12 @@ func filterContent(content string) string {
 		`温馨提示：如要解锁所有应用的完整功能，请开启 \[Gemini 应用活动记录\]\([^)]+\)\s*。?\s*`,
 		`温馨提示：如要解锁所有应用的完整功能，请开启 Gemini 应用活动记录[^。]*。?\s*`,
 		`温馨提示[：:][^\n]*Gemini[^\n]*活动记录[^\n]*\n?`,
+		`我正在处理.*Deep Think[^\n]*\n?`,
+		`正在生成回答[^\n]*\n?`,
+		`稍后.*查看[^\n]*\n?`,
+		`Responses with Deep Think[^\n]*\n?`,
+		`check back in a bit[^\n]*\n?`,
+		`http://googleusercontent\.com/agentic_processing_chip/\d+[^\n]*\n?`,
 	}
 	result := content
 	for _, pattern := range patterns {
@@ -1534,6 +1562,212 @@ func filterContent(content string) string {
 		result = re.ReplaceAllString(result, "")
 	}
 	return strings.TrimSpace(result)
+}
+
+func isDeepThinkPlaceholder(body string) bool {
+	return strings.Contains(body, "agentic_processing_chip") ||
+		strings.Contains(body, "Deep Think") ||
+		strings.Contains(body, "正在生成回答")
+}
+
+type contentResult struct {
+	Content          string
+	ReasoningContent string
+}
+
+func extractFinalContentWithThinking(body string) contentResult {
+	if result := extractContentFromWrbFramesV2(body); result.Content != "" || result.ReasoningContent != "" {
+		return result
+	}
+	return extractFinalContentFallback(body)
+}
+
+func extractFinalContentFallback(body string) contentResult {
+	var contents []string
+	patterns := []struct {
+		startPattern string
+		arrPattern   string
+		escaped      bool
+	}{
+		{`"rc_`, `",["`, false},
+		{`\"rc_`, `\",[\"`, true},
+	}
+
+	for _, p := range patterns {
+		idx := 0
+		for {
+			start := strings.Index(body[idx:], p.startPattern)
+			if start == -1 {
+				break
+			}
+			start += idx
+			arrStart := strings.Index(body[start:], p.arrPattern)
+			if arrStart == -1 {
+				idx = start + len(p.startPattern)
+				continue
+			}
+			if p.escaped {
+				arrStart += start + len(p.arrPattern)
+				endPos := strings.Index(body[arrStart:], `"]`)
+				if endPos == -1 {
+					idx = arrStart
+					continue
+				}
+				content := body[arrStart : arrStart+endPos]
+				if content != "" {
+					contents = append(contents, content)
+				}
+				idx = arrStart + endPos + 2
+			} else {
+				arrStart += start + len(p.arrPattern)
+				content, endPos := extractQuotedString(body[arrStart:])
+				if content != "" {
+					contents = append(contents, content)
+				}
+				idx = arrStart + endPos + 1
+			}
+		}
+	}
+
+	jsonArrayRe := regexp.MustCompile(`\[\s*"rc_[a-f0-9]+"\s*,\s*\[\s*"([^"\\]*(?:\\.[^"\\]*)*)"\s*\]`)
+	matches := jsonArrayRe.FindAllStringSubmatch(body, -1)
+	for _, match := range matches {
+		if len(match) > 1 && match[1] != "" {
+			contents = append(contents, match[1])
+		}
+	}
+
+	return contentResult{Content: assembleContentFragments(contents)}
+}
+
+func extractContentFromWrbFramesV2(body string) contentResult {
+	lines := strings.Split(body, "\n")
+	var best contentResult
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "[[") {
+			continue
+		}
+
+		var frames []interface{}
+		if err := json.Unmarshal([]byte(line), &frames); err != nil {
+			continue
+		}
+
+		for _, frame := range frames {
+			frameItems, ok := frame.([]interface{})
+			if !ok || len(frameItems) < 3 {
+				continue
+			}
+
+			eventName, _ := frameItems[0].(string)
+			if eventName != "wrb.fr" {
+				continue
+			}
+
+			payload, _ := frameItems[2].(string)
+			if payload == "" {
+				continue
+			}
+
+			candidate := extractContentFromPayloadV2(payload)
+			if len(candidate.Content) > len(best.Content) || (best.Content != "" && candidate.ReasoningContent != "" && best.ReasoningContent == "") {
+				best = candidate
+			}
+		}
+	}
+
+	return best
+}
+
+func extractContentFromPayloadV2(payload string) contentResult {
+	var data interface{}
+	if err := json.Unmarshal([]byte(payload), &data); err != nil {
+		return contentResult{}
+	}
+
+	var result contentResult
+	visitRCNodesV2(data, &result)
+	result.Content = strings.TrimSpace(result.Content)
+	return result
+}
+
+func visitRCNodesV2(node interface{}, result *contentResult) {
+	switch value := node.(type) {
+	case []interface{}:
+		if text, ok := extractRCText(value); ok && len(text) > len(result.Content) {
+			result.Content = text
+		}
+		if thinking := extractThinkingFromRCNode(value); thinking != "" && result.ReasoningContent == "" {
+			result.ReasoningContent = thinking
+		}
+		for _, item := range value {
+			visitRCNodesV2(item, result)
+		}
+	}
+}
+
+func extractThinkingFromRCNode(items []interface{}) string {
+	for i := len(items) - 1; i >= 3; i-- {
+		arr, ok := items[i].([]interface{})
+		if !ok || len(arr) == 0 {
+			continue
+		}
+		text := extractThinkingFromIndex(arr)
+		if isLikelyThinkingContent(text) {
+			return text
+		}
+	}
+	return ""
+}
+
+func isLikelyThinkingContent(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "rc_") || strings.Contains(trimmed, "e6fa609c3fa255c0") {
+		return false
+	}
+	markers := []string{
+		"**Step",
+		"Step ",
+		"Thinking",
+		"thinking",
+		"思考",
+		"推理",
+		"分析",
+	}
+	for _, marker := range markers {
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractThinkingFromIndex(arr []interface{}) string {
+	var sb strings.Builder
+	for _, item := range arr {
+		switch v := item.(type) {
+		case string:
+			trimmed := strings.TrimSpace(v)
+			if trimmed != "" {
+				sb.WriteString(trimmed)
+			}
+		case []interface{}:
+			if len(v) > 0 {
+				if s, ok := v[0].(string); ok {
+					trimmed := strings.TrimSpace(s)
+					if trimmed != "" {
+						sb.WriteString(trimmed)
+					}
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func isEmptyAcknowledgmentResponse(body string) bool {
@@ -1604,7 +1838,7 @@ func mapGeminiError(statusCode int, body string) OpenAIError {
 	return OpenAIError{Status: http.StatusBadGateway, Type: "api_error", Code: "bad_gateway", Message: fmt.Sprintf("Gemini API error: %d", statusCode)}
 }
 
-func streamGeminiResponse(w http.ResponseWriter, resp *http.Response, model string, session *GeminiSession, tools []Tool, streamOptions *StreamOptions) (string, string, error) {
+func streamGeminiResponse(w http.ResponseWriter, resp *http.Response, model string, session *GeminiSession, tools []Tool, streamOptions *StreamOptions, accountCtx AccountContext) (string, string, error) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1620,7 +1854,25 @@ func streamGeminiResponse(w http.ResponseWriter, resp *http.Response, model stri
 	updateSessionFromResponse(session, bodyStr)
 	sessionSnapshot := session.Snapshot()
 	sendStreamChunkWithConversation(w, flusher, model, "", "assistant", false, sessionSnapshot.ConversationID)
-	content := filterContent(extractFinalContent(bodyStr))
+
+	result := extractFinalContentWithThinking(bodyStr)
+	content := filterContent(result.Content)
+	reasoningContent := result.ReasoningContent
+
+	if isDeepThinkPlaceholder(result.Content) && isDeepThinkAlias(model) {
+		polledContent, polledReasoning, pollErr := pollDeepThinkResult(session, model, accountCtx)
+		if pollErr != nil {
+			depGetLogger().Warn("Deep Think 流式轮询失败: %v", pollErr)
+		} else {
+			content = polledContent
+			reasoningContent = polledReasoning
+		}
+	}
+
+	if reasoningContent != "" {
+		sendStreamReasoningChunk(w, flusher, model, reasoningContent)
+	}
+
 	if content != "" {
 		cleanContent, toolCalls := parseToolCalls(content, tools)
 		cleanContent = filterContent(cleanContent)

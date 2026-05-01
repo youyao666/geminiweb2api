@@ -190,3 +190,83 @@ func TestCookieHealthReportsImportantCookiesAndTimeHints(t *testing.T) {
 		t.Fatalf("expected opaque PSIDTS cookies, got %v", health.OpaqueSessionCookies)
 	}
 }
+
+func TestSelectAccountForSessionUsesWeightedRoundRobin(t *testing.T) {
+	cfg := config.Config{Accounts: []config.Account{
+		{ID: "acc-1", Enabled: true, Weight: 2, Token: "token-1"},
+		{ID: "acc-2", Enabled: true, Weight: 1, Token: "token-2"},
+	}}
+	m := newTestManager(cfg)
+
+	var got []string
+	for i := 0; i < 6; i++ {
+		selected, err := m.SelectAccountForSession("", false)
+		if err != nil {
+			t.Fatalf("select account: %v", err)
+		}
+		got = append(got, selected.ID)
+	}
+	want := []string{"acc-1", "acc-1", "acc-2", "acc-1", "acc-1", "acc-2"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected weighted sequence: got %v want %v", got, want)
+		}
+	}
+}
+
+func TestSelectAccountForSessionKeepsExistingBinding(t *testing.T) {
+	cfg := config.Config{Accounts: []config.Account{
+		{ID: "acc-1", Enabled: true, Weight: 1, Token: "token-1"},
+		{ID: "acc-2", Enabled: true, Weight: 1, Token: "token-2"},
+	}}
+	m := newTestManager(cfg)
+
+	first, err := m.SelectAccountForSession("session-a", false)
+	if err != nil {
+		t.Fatalf("first select: %v", err)
+	}
+	second, err := m.SelectAccountForSession("session-a", false)
+	if err != nil {
+		t.Fatalf("second select: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected sticky session account %q, got %q", first.ID, second.ID)
+	}
+
+	newSession, err := m.SelectAccountForSession("session-a", true)
+	if err != nil {
+		t.Fatalf("new session select: %v", err)
+	}
+	if newSession.ID == first.ID {
+		t.Fatalf("expected new session to re-enter round robin, got same account %q", newSession.ID)
+	}
+}
+
+func TestSelectAccountForSessionSkipsBackoffAccount(t *testing.T) {
+	cfg := config.Config{Accounts: []config.Account{
+		{ID: "acc-1", Enabled: true, Weight: 1, Token: "token-1"},
+		{ID: "acc-2", Enabled: true, Weight: 1, Token: "token-2"},
+	}}
+	m := newTestManager(cfg)
+	m.MarkAccountFailure("acc-1", "rate limited")
+
+	for i := 0; i < 3; i++ {
+		selected, err := m.SelectAccountForSession("", false)
+		if err != nil {
+			t.Fatalf("select account: %v", err)
+		}
+		if selected.ID != "acc-2" {
+			t.Fatalf("expected backoff account to be skipped, got %q", selected.ID)
+		}
+	}
+}
+
+func newTestManager(cfg config.Config) *Manager {
+	logger := logging.New(logging.LevelError, io.Discard, nil)
+	return NewManager(
+		func() config.Config { return cfg },
+		func() *http.Client { return http.DefaultClient },
+		func() *logging.Logger { return logger },
+		nil,
+	)
+}

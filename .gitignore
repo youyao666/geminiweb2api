@@ -9,3 +9,9 @@ state.json
 # Temporary/test files
 test.txt
 *.exe
+*.exe~
+*.har
+*.ndjson
+__pycache__/
+browser-profile/
+capture_gemini_mitm.py
