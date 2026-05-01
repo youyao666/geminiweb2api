@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,8 +130,25 @@ type Message struct {
 }
 
 type ContentPart struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+type ImageURL struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type ParsedMessage struct {
+	Text   string
+	Images []ImageData
+}
+
+type ImageData struct {
+	MimeType string
+	Base64   string
+	URL      string
 }
 
 type ToolCall struct {
@@ -357,25 +375,103 @@ func noteGeminiResponseErrors(body string, sessionKey string, mode string) {
 }
 
 func extractMessageContent(msg Message) string {
+	return extractMultimodalContent(msg).Text
+}
+
+func extractMultimodalContent(msg Message) ParsedMessage {
 	switch v := msg.Content.(type) {
 	case string:
-		return v
+		return ParsedMessage{Text: v}
 	case []interface{}:
-		var parts []string
+		var parsed ParsedMessage
+		var textParts []string
 		for _, part := range v {
-			if p, ok := part.(map[string]interface{}); ok {
-				if text, ok := p["text"].(string); ok {
-					parts = append(parts, text)
-				}
+			p, ok := part.(map[string]interface{})
+			if !ok {
+				continue
 			}
+			if text, ok := p["text"].(string); ok {
+				textParts = append(textParts, text)
+			}
+			imageURL, ok := extractImageURLPart(p)
+			if !ok || imageURL == "" {
+				continue
+			}
+			image := ImageData{URL: imageURL}
+			if mimeType, data, ok := parseDataURI(imageURL); ok {
+				image.MimeType = mimeType
+				image.Base64 = data
+			}
+			parsed.Images = append(parsed.Images, image)
 		}
-		return strings.Join(parts, "\n")
+		parsed.Text = strings.Join(textParts, "\n")
+		return parsed
 	default:
 		if v != nil {
-			return fmt.Sprintf("%v", v)
+			return ParsedMessage{Text: fmt.Sprintf("%v", v)}
 		}
-		return ""
+		return ParsedMessage{}
 	}
+}
+
+func extractImageURLPart(part map[string]interface{}) (string, bool) {
+	imageURL, ok := part["image_url"]
+	if !ok {
+		return "", false
+	}
+	switch v := imageURL.(type) {
+	case string:
+		return v, true
+	case map[string]interface{}:
+		urlValue, ok := v["url"].(string)
+		return urlValue, ok
+	default:
+		return "", false
+	}
+}
+
+func parseDataURI(uri string) (mimeType string, data string, ok bool) {
+	const marker = ";base64,"
+	if !strings.HasPrefix(uri, "data:") {
+		return "", "", false
+	}
+	idx := strings.Index(uri, marker)
+	if idx < 0 {
+		return "", "", false
+	}
+	mimeType = uri[len("data:"):idx]
+	data = uri[idx+len(marker):]
+	return mimeType, data, mimeType != "" && data != ""
+}
+
+func downloadImageAsBase64(imageURL string, httpClient *http.Client) (ImageData, error) {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Get(imageURL)
+	if err != nil {
+		return ImageData{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ImageData{}, fmt.Errorf("download image returned status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ImageData{}, err
+	}
+	mimeType := resp.Header.Get("Content-Type")
+	if idx := strings.Index(mimeType, ";"); idx >= 0 {
+		mimeType = strings.TrimSpace(mimeType[:idx])
+	}
+	if mimeType == "" {
+		mimeType = http.DetectContentType(body)
+	}
+	return ImageData{
+		MimeType: mimeType,
+		Base64:   base64.StdEncoding.EncodeToString(body),
+		URL:      imageURL,
+	}, nil
 }
 
 func buildToolsPrompt(tools []Tool) string {

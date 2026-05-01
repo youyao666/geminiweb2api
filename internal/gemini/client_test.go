@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -188,3 +190,91 @@ func TestExtractThinkingFromRCNode_IgnoresMetadata(t *testing.T) {
 		t.Fatalf("expected metadata to be ignored, got: %s", thinking)
 	}
 }
+
+func TestParseDataURI(t *testing.T) {
+	mimeType, data, ok := parseDataURI("data:image/png;base64,iVBORw0KGgo=")
+	if !ok {
+		t.Fatal("expected data URI to parse")
+	}
+	if mimeType != "image/png" {
+		t.Fatalf("unexpected mime type: %s", mimeType)
+	}
+	if data != "iVBORw0KGgo=" {
+		t.Fatalf("unexpected data: %s", data)
+	}
+}
+
+func TestExtractMultimodalContent_TextAndImages(t *testing.T) {
+	msg := Message{
+		Role: "user",
+		Content: []interface{}{
+			map[string]interface{}{"type": "text", "text": "Describe this"},
+			map[string]interface{}{
+				"type": "image_url",
+				"image_url": map[string]interface{}{
+					"url": "data:image/png;base64,iVBORw0KGgo=",
+				},
+			},
+			map[string]interface{}{
+				"type": "image_url",
+				"image_url": map[string]interface{}{
+					"url":    "https://example.com/cat.jpg",
+					"detail": "high",
+				},
+			},
+			map[string]interface{}{"type": "text", "text": "Use concise language"},
+		},
+	}
+
+	parsed := extractMultimodalContent(msg)
+
+	if parsed.Text != "Describe this\nUse concise language" {
+		t.Fatalf("unexpected text: %q", parsed.Text)
+	}
+	if len(parsed.Images) != 2 {
+		t.Fatalf("expected 2 images, got %d", len(parsed.Images))
+	}
+	if parsed.Images[0].MimeType != "image/png" || parsed.Images[0].Base64 != "iVBORw0KGgo=" {
+		t.Fatalf("unexpected data URI image: %+v", parsed.Images[0])
+	}
+	if parsed.Images[1].URL != "https://example.com/cat.jpg" {
+		t.Fatalf("unexpected URL image: %+v", parsed.Images[1])
+	}
+}
+
+func TestExtractMessageContentUsesMultimodalText(t *testing.T) {
+	msg := Message{
+		Role: "user",
+		Content: []interface{}{
+			map[string]interface{}{"type": "text", "text": "first"},
+			map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "data:image/jpeg;base64,abc"}},
+			map[string]interface{}{"type": "text", "text": "second"},
+		},
+	}
+
+	got := extractMessageContent(msg)
+	if got != "first\nsecond" {
+		t.Fatalf("unexpected text content: %q", got)
+	}
+}
+
+func TestDownloadImageAsBase64(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{1, 2, 3, 4})
+	}))
+	defer server.Close()
+
+	image, err := downloadImageAsBase64(server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("download image: %v", err)
+	}
+	if image.MimeType != "image/png" {
+		t.Fatalf("unexpected mime type: %s", image.MimeType)
+	}
+	if image.Base64 != "AQIDBA==" {
+		t.Fatalf("unexpected base64: %s", image.Base64)
+	}
+	if image.URL != server.URL {
+		t.Fatalf("unexpected url: %s", image.URL)
+	}
