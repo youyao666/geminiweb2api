@@ -63,9 +63,30 @@ func (s *stateStore) load() (persistentState, error) {
 func (s *stateStore) save(state persistentState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o644)
+
+	dir := filepath.Dir(s.path)
+	tmpFile, err := os.CreateTemp(dir, "state.json.tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if err := tmpFile.Chmod(0o600); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpFile.Name(), s.path)
 }
