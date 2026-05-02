@@ -2,7 +2,7 @@
   "api_key": "your-api-key-here",
   "token": "",
   "cookies": "",
-  "tokens": null,
+  "tokens": [],
   "accounts": [
     {
       "id": "acc-1",
